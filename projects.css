@@ -1,0 +1,35 @@
+
+.Scroll_Wrapper {
+    display: grid;
+    width: 100%;
+    overflow-y: hidden;
+    overflow-x: scroll;
+    gap: 0 20px;
+    grid-template-rows: auto auto;
+    grid-auto-columns: auto;
+    grid-auto-flow: column;
+    /* standards way, currently only implemented by Firefox */
+    scrollbar-color: #b5b5b5 #616161;
+    scrollbar-width: thin;
+    scroll-snap-type: x mandatory;
+    scroll-behavior: smooth;
+}
+
+.Scroll_Wrapper::-webkit-scrollbar {
+    width: 25px;
+    background-color: #616161;
+}
+
+.Scroll_Wrapper::-webkit-scrollbar-thumb {
+    background-color: #b5b5b5;
+    border-radius: 12px;
+}
+
+.Item {
+    grid-row: 1/-1;
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-template-columns: 100px 200px;
+    gap: 0 20px;
+    margin: 0;
+}

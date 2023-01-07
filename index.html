@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <meta name="Description" content="Home page of Bingster a web development and data science blog">
+    <meta name="theme-color" content="#000000" />
+    <title>Bingster</title>
+    <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.5.0/css/all.css" integrity="sha384-B4dIYHKNBt8Bc12p+WXckhzcICo0wtJAoU8YZTY5qE0Id1GSseTk6S+L3BlXeVIU" crossorigin="anonymous">
+    <link rel="shortcut icon" href="./img/favicon.ico">
+    <link rel="stylesheet" href="style.css">
+
+
+</head>
+
+<body>
+    <div class="container">
+        <div id="particles-js"></div>
+        
+        
+        <!-- Navigation ------------------------------------------------------>
+        <div class="navbar-background">
+            <a href="index.html">
+                <span class="title nav-title">Bingster
+              </span>
+            </a>
+            <div class="menu-bars" onclick="Toggle()">
+                <i class="fab fa-bars fa"></i>
+            </div>
+        </div>
+
+        <nav class="nav" id="nav">
+            <ul onclick="Toggle()">
+                <li class="display-picture">
+                <li><a href="index.html">Home</a></li>
+                <li><a href="blog.html">Blog</a></li>
+                <li><a href="Projects.html">Projects</a></li>
+                <li><a href="contact.html">Contact</a></li>
+                <li><a href="about.html">About</a></li>
+              
+            </ul>
+        </nav>
+       
+       
+        <section id="about">
+            <ul class="social-icons">
+                    <li class="icons">
+                        <a href="https://github.com/b1ngster/" target="_blank" rel="noopener" title="Github">
+                            <span class="fa-layers-fa-fw">
+                            <i class="fas fa-circle circle red"></i>
+                            <i class="fab fa-github fa-inverse social-icon"></i>
+                        </span>
+                        </a>
+                    </li>
+                    <li class="icons">
+                        <a href="https://twitter.com/_bingster_/" target="_blank" rel="noopener" title="Twitter">
+                            <span class="fa-layers-fa-fw">
+                            <i class="fas fa-circle circle red"></i>
+                            <i class="fab fa-twitter fa-inverse social-icon"></i>
+                        </span>
+                        </a>
+                    </li>
+                    <li class="icons">
+                        <a href="https://www.linkedin.com/in/garyblackpool/" target="_blank" rel="noopener" title="Linkedin">
+                            <span class="fa-layers-fa-fw">
+                            <i class="fas fa-circle circle red"></i>
+                            <i class="fab fa-linkedin-in fa-inverse social-icon"></i>
+                        </span>
+                        </a>
+                    </li><br>
+                </ul>
+            </div>
+        </section>
+        <!-- Experience ------------------------------------------------------>
+        
+        </section>
+        <!-- Javascript -->
+        <script>
+            function Toggle() {
+                var x = document.getElementById("nav");
+                if (x.className === "nav") {
+                    x.className += " nav-expand";
+                } else {
+                    x.className = "nav";
+                }
+            }
+        </script>
+</body>
+
+</html>

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <meta name="Description" content="Home page of Bingster a web development and data science blog">
+    <meta name="theme-color" content="#000000" />
+    <title>Bingster</title>
+    <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.5.0/css/all.css" integrity="sha384-B4dIYHKNBt8Bc12p+WXckhzcICo0wtJAoU8YZTY5qE0Id1GSseTk6S+L3BlXeVIU" crossorigin="anonymous">
+    <link rel="shortcut icon" href="./img/favicon.ico">
+    <link rel="stylesheet" href="style.css">
+
+
+</head>
+
+<body>
+    <div class="container">
+        <div id="particles-js"></div>
+        
+        
+        <!-- Navigation ------------------------------------------------------>
+        <div class="navbar-background">
+            <a href="index.html">
+                <span class="title nav-title">Bingster
+              </span>
+            </a>
+            <div class="menu-bars" onclick="Toggle()">
+                <i class="fab fa-bars fa"></i>
+            </div>
+        </div>
+
+        <nav class="nav" id="nav">
+            <ul onclick="Toggle()">
+                <li class="display-picture">
+                <li><a href="index.html">Home</a></li>
+                <li><a href="blog.html">Blog</a></li>
+                <li><a href="Projects.html">Projects</a></li>
+                <li><a href="contact.html">Contact</a></li>
+                <li><a href="about.html">About</a></li>
+              
+            </ul>
+        </nav> 
+        
+        <!-- Experience ------------------------------------------------------>
+        <section id="experience">
+            <div class="experience-content-top content-padding">
+                <h2 class="title section-title blue">About</h2>
+
+                <div class="item-wrapper">
+                    <div class="item">
+                        <h3 class="title item-title red">Finished Masters in Data Science</h3>
+                        <h4 class="title item-subtitle dark-red"> Here is my review</h4>
+                        <!-- About ----------------------------------------------------------->
+         <p class="main grey"> 
+                
+                I have recently finished studying Masters in Data Science in 2022 and also have finished BSc Web Technologies 
+                and Digital Media, 
+                I am looking forward to implementing my new knowledge in developing applications. 
+                Have a wide range of interests within the field of computing, specifically I am interested in developing websites and knowledge graph applications.  
+ I very much enjoyed the I very much enjoyed studying Data Science as it allowed me to  develop skills such as mathematical representation of algorithms with LaTex and the verification of simulations. I have good knowledge of working with large datasets such as the Midas dataset, Twitter, OpenCrawl writing a dissertation called “Improving photovoltaic forecasting using Big data”, and “Identifying Business Insights and Forecasting using Big Data” have a Bachelors in Web Technology an Digital Media.  I have also worked with Big Data in R while writing and essay about the comparison of Automated Exploratory Analysis Packages.
+</p>
+            <h4 class="title item-subtitle blue">Artificial Intelligence </h4> 
+                            
+                     
+                        <p class="main">Projects in </p><br>
+                    
+                
+                
+                <h4 class="title item-subtitle blue">Big Data </h4>
+                <p class="main">Projects in </p><br>
+                
+                <h4 class="title item-subtitle blue">Internet of Things </h4>
+                <p class="main">Projects in </p><br>
+                                
+                <h4 class="title item-subtitle blue">Digital Signal and Image Processing </h4>
+                <p class="main">Projects in </p><br>
+                
+                <h4 class="title item-subtitle blue">Programming with Data </h4> 
+                <p class="main">Projects in </p><br>
+                
+                <h4 class="title item-subtitle blue">Research Methods </h4>
+
+                <br>
+                 <p class="main">Projects in </p><br>
+                    </div>
+                    <div class="item-right">
+                        <p class="main item-date red align">October 2021 - September 2022</p>
+                    </div>
+                </div>
+           
+
+            </div>
+        </section>
+       
+        <script>
+            function Toggle() {
+                var x = document.getElementById("nav");
+                if (x.className === "nav") {
+                    x.className += " nav-expand";
+                } else {
+                    x.className = "nav";
+                }
+            }
+        </script>
+</body>
+
+</html>
