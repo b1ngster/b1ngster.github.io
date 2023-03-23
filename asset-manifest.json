@@ -1,0 +1,15 @@
+{
+  "files": {
+    "main.css": "/b1ngster.github.com/friendly-robot/static/css/main.21882a8e.css",
+    "main.js": "/b1ngster.github.com/friendly-robot/static/js/main.13720095.js",
+    "static/js/496.0320d045.chunk.js": "/b1ngster.github.com/friendly-robot/static/js/496.0320d045.chunk.js",
+    "index.html": "/b1ngster.github.com/friendly-robot/index.html",
+    "main.21882a8e.css.map": "/b1ngster.github.com/friendly-robot/static/css/main.21882a8e.css.map",
+    "main.13720095.js.map": "/b1ngster.github.com/friendly-robot/static/js/main.13720095.js.map",
+    "496.0320d045.chunk.js.map": "/b1ngster.github.com/friendly-robot/static/js/496.0320d045.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.21882a8e.css",
+    "static/js/main.13720095.js"
+  ]
+}
