@@ -2,7 +2,7 @@
   "name": "codespaces-react",
   "version": "0.1.0",
   "private": true,
-  "homepage": "https://b1ngster.github.io/friendly-robot/",
+  "homepage": "https://b1ngster.github.io/",
   "dependencies": {
     "@react-three/drei": "^9.47.1",
     "@react-three/fiber": "^8.12.0",
