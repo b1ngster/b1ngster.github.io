@@ -1,34 +1,184 @@
-.App {
-  text-align: center;
+/*
+ * The page is one full-viewport canvas with a gamepad overlaid. It renders
+ * inside an iframe on bingster.me as well as standalone, so everything is
+ * sized against the viewport and nothing may cause scrolling.
+ */
+
+html,
+body {
+  margin: 0;
+  overflow: hidden;
 }
 
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
+.stage {
+  position: relative;
+  height: 100vh;
 }
 
 canvas {
   background-color: #282c34;
-  min-height: 100vh;
+  display: block;
+}
+
+/* --- The gamepad ------------------------------------------------------- */
+
+.controls {
+  position: absolute;
+  inset: 0;
+  /* The layer itself must not eat drags on the scene… */
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: system-ui, sans-serif;
+}
+
+.round-button {
+  /* …but the buttons do. */
+  pointer-events: auto;
+  touch-action: none;
+
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  font-size: calc(10px + 2vmin);
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.55);
+  background: rgba(20, 24, 34, 0.35);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+}
+
+.round-button:active {
+  background: rgba(255, 255, 255, 0.45);
+  color: #14181f;
+}
+
+/* Left thumb: an analog stick. The base is the touch target; the knob is
+   purely visual and follows the thumb from JS. */
+.joystick {
+  pointer-events: auto;
+  touch-action: none;
+
+  position: absolute;
+  left: 24px;
+  bottom: 24px;
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  background: rgba(20, 24, 34, 0.35);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.joystick-knob {
+  /* Hit-testing must always land on the base, never the knob. */
+  pointer-events: none;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+/* Right thumb: Select. */
+.actions {
+  position: absolute;
+  right: 24px;
+  bottom: 36px;
+}
+
+.action-select {
+  width: 76px;
+  height: 76px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+/* --- The sign-up card -------------------------------------------------- */
+
+.signup-backdrop {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 12, 18, 0.6);
+  font-family: system-ui, sans-serif;
+}
+
+.signup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(320px, calc(100vw - 48px));
+  padding: 22px 24px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: #1c212b;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.signup h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.signup p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.signup label {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.signup input {
+  margin-bottom: 8px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: #12151c;
+  color: inherit;
+  font-size: 15px;
+}
+
+.signup input:focus {
+  outline: 2px solid #2f6fd8;
+  outline-offset: 1px;
+}
+
+.signup-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.signup-buttons button {
+  padding: 9px 16px;
+  border-radius: 8px;
+  border: none;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.signup-cancel {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.signup-submit {
+  background: #2f6fd8;
   color: white;
 }
 
-.App-link {
-  color: #61dafb;
-}
-
-.heart {
-  color: #ff0000;
-}
-
-.small {
-  font-size: 0.75rem;
-}
-#Canvas-container {
-  height: 1000px;
+.signup-submit:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
