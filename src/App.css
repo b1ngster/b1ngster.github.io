@@ -52,15 +52,26 @@ canvas {
   color: #14181f;
 }
 
+/* Under everything: drag-to-look. Claims any pointer the joystick and
+   buttons (which sit above it) didn't. */
+.look-layer {
+  pointer-events: auto;
+  touch-action: none;
+  position: absolute;
+  inset: 0;
+}
+
 /* Left thumb: an analog stick. The base is the touch target; the knob is
-   purely visual and follows the thumb from JS. */
+   purely visual and follows the thumb from JS. Both controls sit well above
+   the screen bottom — thumbs rest mid-screen, and the bottom edge is where
+   browsers put their own gestures. */
 .joystick {
   pointer-events: auto;
   touch-action: none;
 
   position: absolute;
-  left: 24px;
-  bottom: 24px;
+  left: 28px;
+  bottom: max(84px, 12vh);
   width: 132px;
   height: 132px;
   border-radius: 50%;
@@ -85,8 +96,8 @@ canvas {
 /* Right thumb: Select. */
 .actions {
   position: absolute;
-  right: 24px;
-  bottom: 36px;
+  right: 28px;
+  bottom: max(96px, 13vh);
 }
 
 .action-select {

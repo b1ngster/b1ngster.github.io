@@ -1,9 +1,33 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { Billboard, Text } from '@react-three/drei'
-import { useFrame } from '@react-three/fiber'
+import { Billboard, Text, useAnimations, useGLTF } from '@react-three/drei'
+import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment'
 import { input, attachKeyboard } from './input'
+import midnightSun from './timing/midnightSun.json'
+
+// Timing lifted straight from the "Midnight Sun" Renoise project: chord
+// changes (accents) and bass note onsets (downbeats), in seconds. No audio
+// plays — the room just grooves to the song's own rhythm on a silent loop,
+// so a chord-change swell should feel bigger than a plain bass pulse.
+const { duration: GROOVE_DURATION, beatPeriod: GROOVE_BEAT, accents: GROOVE_ACCENTS, downbeats: GROOVE_DOWNBEATS } = midnightSun
+
+// Decaying pulse from whichever event (in `times`) most recently passed,
+// wrapping around the loop point so the tail end of one pass blends into
+// the next rather than snapping back to zero.
+const pulseEnvelope = (times, t, tau, window) => {
+  let best = 0
+  for (let i = 0; i < times.length; i++) {
+    let dt = t - times[i]
+    if (dt < 0) dt += GROOVE_DURATION
+    if (dt < window) {
+      const e = Math.exp(-dt / tau)
+      if (e > best) best = e
+    }
+  }
+  return best
+}
 
 /*
  * Room one of the B1ngster world: the Lobby. A third-person character runs
@@ -18,12 +42,100 @@ import { input, attachKeyboard } from './input'
  * to ever be on screen.
  */
 
+// MakeHuman characters, exported from the makehuman-web container via MPFB
+// as textured GLBs. glTF convention puts their faces on +z, which is what
+// the run code expects. The male is the player; the female is the
+// receptionist behind the lobby desk.
+// The GLB filenames are stable across deploys, so a version tag busts
+// browser caches whenever a model is re-exported — bump it on every model
+// change or clients keep their cached copy for however long they please.
+const MODEL_VERSION = 9
+const MODEL_URL = `${process.env.PUBLIC_URL}/models/male.glb?v=${MODEL_VERSION}`
+const RECEPTIONIST_URL = `${process.env.PUBLIC_URL}/models/female.glb?v=${MODEL_VERSION}`
+
+// `motion` is an optional ref holding the current pace (0..1). With one, the
+// walk clip fades in and speeds up with movement; without one (or without
+// clips in the GLB) the character just breathes through its idle loop.
+const Character = ({ url, motion }) => {
+  const { scene, animations } = useGLTF(url)
+  const { actions } = useAnimations(animations, scene)
+  useMemo(() => {
+    scene.traverse((obj) => {
+      if (obj.isMesh) {
+        obj.castShadow = true
+        obj.receiveShadow = true
+      }
+    })
+  }, [scene])
+
+  useEffect(() => {
+    actions.idle?.play()
+    if (actions.walk) {
+      actions.walk.setEffectiveWeight(0)
+      actions.walk.play()
+    }
+  }, [actions])
+
+  useFrame((_, delta) => {
+    const walk = actions.walk
+    if (!walk || !motion) return
+    const dt = Math.min(delta, 0.05)
+    const pace = motion.current
+    // Ease the walk in and out rather than snapping at the first stick twitch.
+    const weight = THREE.MathUtils.damp(
+      walk.getEffectiveWeight(), pace > 0.05 ? 1 : 0, 8, dt)
+    walk.setEffectiveWeight(weight)
+    actions.idle?.setEffectiveWeight(1 - weight)
+    // Stride pace follows run speed; never slower than a deliberate amble.
+    walk.timeScale = 0.7 + 1.1 * pace
+  })
+
+  return <primitive object={scene} />
+}
+useGLTF.preload(MODEL_URL)
+useGLTF.preload(RECEPTIONIST_URL)
+
+// If the GLB fails to load (offline, blocked, corrupted), fall back to the
+// placeholder instead of letting the error unmount the whole canvas.
+class CharacterBoundary extends React.Component {
+  state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  render() {
+    return this.state.failed ? <PlaceholderFigure /> : this.props.children
+  }
+}
+
+// Image-based lighting built on the GPU at startup — no network fetch, so
+// nothing here can fail and blank the page (which is exactly what happened
+// with a CDN-hosted HDR on iPad).
+const RoomLighting = () => {
+  const gl = useThree((state) => state.gl)
+  const scene = useThree((state) => state.scene)
+
+  useEffect(() => {
+    const pmrem = new THREE.PMREMGenerator(gl)
+    const envMap = pmrem.fromScene(new RoomEnvironment()).texture
+    scene.environment = envMap
+    return () => {
+      scene.environment = null
+      envMap.dispose()
+      pmrem.dispose()
+    }
+  }, [gl, scene])
+
+  return null
+}
+
 const ROOM_HW = 9 // half-width of the room, along x
 const ROOM_HD = 7 // half-depth, along z
 const WALL_H = 4
 
 const PLAYER_RADIUS = 0.35
-const RUN_SPEED = 6 // at full stick deflection; the stick's magnitude scales it
+const RUN_SPEED = 3 // at full stick deflection; the stick's magnitude scales it
 
 const DOOR_W = 2
 const DOOR_H = 2.6
@@ -33,6 +145,7 @@ const NEAR_DISTANCE = 2.6 // close enough for Select to reach the door
 // as [centreX, centreZ, halfX, halfZ].
 const COLLIDERS = [
   [5.5, -4.5, 1.6, 0.6], // reception desk
+  [5.5, -5.6, 0.35, 0.35], // the receptionist behind it
   [-8.2, -6.2, 0.5, 0.5], // plant, far corner
   [8.2, 6.2, 0.5, 0.5], // plant, near corner
 ]
@@ -41,9 +154,19 @@ export const Scene = ({ identity, onSignUp }) => {
   const player = useRef()
   const door = useRef()
   const nameTag = useRef()
+  const receptionist = useRef()
+  const lamp = useRef()
 
   const selectWasDown = useRef(false)
   const hadIdentity = useRef(Boolean(identity))
+  // Camera azimuth around the player, driven by drag-to-look. Zero is the
+  // spawn framing: camera on +z, looking at the far wall.
+  const yaw = useRef(0)
+  // Camera distance, driven by pinch/wheel. 3.4 is the spawn framing.
+  const camDist = useRef(3.4)
+  // Current movement pace, shared with the player Character so its walk
+  // cycle can follow — a ref, because it changes sixty times a second.
+  const paceRef = useRef(0)
 
   const [doorOpen, setDoorOpen] = useState(false)
   const [nearDoor, setNearDoor] = useState(false)
@@ -70,11 +193,31 @@ export const Scene = ({ identity, onSignUp }) => {
     const dt = Math.min(delta, 0.05)
     const body = player.current
 
+    // --- Looking -------------------------------------------------------
+    // Drags accumulate in input.look between frames; consume and zero it.
+    // Dragging right spins the room to the right, OrbitControls-style.
+    yaw.current -= input.look * 0.006
+    input.look = 0
+    const sy = Math.sin(yaw.current)
+    const cy = Math.cos(yaw.current)
+
+    // Pinch/wheel zoom, clamped between a close-up and most of the room.
+    camDist.current = THREE.MathUtils.clamp(
+      camDist.current - input.zoom * 0.01, 1.6, 6.5)
+    input.zoom = 0
+
     // --- Running -------------------------------------------------------
     // The stick is analog: its direction steers, its deflection sets the
     // pace. Length can exceed 1 when keyboard diagonals stack, so cap it.
-    const move = scratch.move.set(input.x, 0, input.y)
+    // Axes are camera-relative — up always runs away from the camera, no
+    // matter where the camera has been dragged — so rotate them by yaw.
+    const move = scratch.move.set(
+      input.x * cy + input.y * sy,
+      0,
+      -input.x * sy + input.y * cy
+    )
     const pace = Math.min(move.length(), 1)
+    paceRef.current = pace
 
     if (pace > 0.01) {
       move.normalize()
@@ -123,22 +266,43 @@ export const Scene = ({ identity, onSignUp }) => {
       door.current.position.x, doorOpen ? DOOR_W + 0.15 : 0, 8, dt)
 
     // --- Third-person camera -------------------------------------------
-    // A fixed shoulder offset rather than orbiting with the player's facing:
-    // the stick then always means what it shows (up runs away from the
-    // camera). The walls the camera ends up behind are single-sided planes
-    // facing inward, so it sees straight through them into the room.
+    // A shoulder offset that orbits only when dragged, never with the
+    // player's facing: the stick then always means what it shows (up runs
+    // away from the camera). The walls the camera ends up behind are
+    // single-sided planes facing inward, so it sees straight through them
+    // into the room. The offset is deliberately tight — the character
+    // should fill the frame rather than read as a speck in the room.
+    // The camera rides lower when close (an over-the-shoulder framing) and
+    // higher when pulled back, staying under the 4m ceiling.
+    const dist = camDist.current
+    const height = THREE.MathUtils.clamp(0.6 + 0.42 * dist, 1.3, 3.2)
     const goal = scratch.camera.set(
-      body.position.x,
-      body.position.y + 2.8,
-      body.position.z + 5
+      body.position.x + dist * sy,
+      body.position.y + height,
+      body.position.z + dist * cy
     )
     state.camera.position.lerp(goal, 1 - Math.pow(0.0005, dt))
-    state.camera.lookAt(body.position.x, body.position.y + 1.1, body.position.z)
+    state.camera.lookAt(body.position.x, body.position.y + 1.2, body.position.z)
 
     // The name tag rides above the player but lives outside the player group:
     // a Billboard inside a rotating parent would inherit the run direction.
+    // The male model stands 1.70m, so the tag sits at 2.05 to clear his head.
     if (nameTag.current) {
-      nameTag.current.position.set(body.position.x, 1.8, body.position.z)
+      nameTag.current.position.set(body.position.x, 2.05, body.position.z)
+    }
+
+    // --- The room's silent groove, ghosted from the song's own rhythm ---
+    const loopT = state.clock.elapsedTime % GROOVE_DURATION
+    const beatPhase = ((loopT % GROOVE_BEAT) / GROOVE_BEAT) * Math.PI * 2
+    const accentEnv = pulseEnvelope(GROOVE_ACCENTS, loopT, 0.55, 2.2)
+    const downbeatEnv = pulseEnvelope(GROOVE_DOWNBEATS, loopT, 0.18, 0.6)
+
+    if (receptionist.current) {
+      receptionist.current.position.y = Math.sin(beatPhase) * 0.006 + accentEnv * 0.03
+      receptionist.current.rotation.y = Math.sin(beatPhase) * 0.015 + accentEnv * 0.05
+    }
+    if (lamp.current) {
+      lamp.current.intensity = 0.9 + downbeatEnv * 0.12 + accentEnv * 0.28
     }
   })
 
@@ -149,47 +313,58 @@ export const Scene = ({ identity, onSignUp }) => {
   return (
     <>
       <color attach="background" args={['#15181e']} />
-      <ambientLight intensity={0.5} />
+      {/* Image-based lighting, so the character's skin and cloth pick up
+          believable bounce light instead of flat lamp shading. */}
+      <RoomLighting />
+      <ambientLight intensity={0.35} />
       {/* The main ceiling lamp; the only shadow-caster, which one room can afford. */}
-      <pointLight castShadow position={[0, WALL_H - 0.6, 0]} intensity={0.9} distance={24} />
+      <pointLight
+        ref={lamp}
+        castShadow
+        position={[0, WALL_H - 0.6, 0]}
+        intensity={0.9}
+        distance={24}
+        shadow-mapSize={[2048, 2048]}
+        shadow-bias={-0.0004}
+      />
       <pointLight position={[5.5, WALL_H - 1, -4]} intensity={0.35} distance={10} color="#ffe9c4" />
 
       {/* --- The room shell: single-sided planes facing inward ---------- */}
       <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[ROOM_HW * 2, ROOM_HD * 2]} />
-        <meshStandardMaterial color="#7a5c3e" />
+        <meshStandardMaterial color="#7a5c3e" envMapIntensity={0.3} />
       </mesh>
       <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, WALL_H, 0]}>
         <planeGeometry args={[ROOM_HW * 2, ROOM_HD * 2]} />
-        <meshStandardMaterial color="#cfc8bc" />
+        <meshStandardMaterial color="#cfc8bc" envMapIntensity={0.3} />
       </mesh>
 
       {/* Back wall, in three pieces around the doorway */}
       <mesh receiveShadow position={[-(DOOR_W / 2 + sideW / 2), WALL_H / 2, -ROOM_HD]}>
         <planeGeometry args={[sideW, WALL_H]} />
-        <meshStandardMaterial color="#9d8f7b" />
+        <meshStandardMaterial color="#9d8f7b" envMapIntensity={0.3} />
       </mesh>
       <mesh receiveShadow position={[DOOR_W / 2 + sideW / 2, WALL_H / 2, -ROOM_HD]}>
         <planeGeometry args={[sideW, WALL_H]} />
-        <meshStandardMaterial color="#9d8f7b" />
+        <meshStandardMaterial color="#9d8f7b" envMapIntensity={0.3} />
       </mesh>
       <mesh receiveShadow position={[0, DOOR_H + (WALL_H - DOOR_H) / 2, -ROOM_HD]}>
         <planeGeometry args={[DOOR_W, WALL_H - DOOR_H]} />
-        <meshStandardMaterial color="#9d8f7b" />
+        <meshStandardMaterial color="#9d8f7b" envMapIntensity={0.3} />
       </mesh>
 
       {/* Front and side walls */}
       <mesh rotation={[0, Math.PI, 0]} position={[0, WALL_H / 2, ROOM_HD]}>
         <planeGeometry args={[ROOM_HW * 2, WALL_H]} />
-        <meshStandardMaterial color="#a89a85" />
+        <meshStandardMaterial color="#a89a85" envMapIntensity={0.3} />
       </mesh>
       <mesh receiveShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW, WALL_H / 2, 0]}>
         <planeGeometry args={[ROOM_HD * 2, WALL_H]} />
-        <meshStandardMaterial color="#a89a85" />
+        <meshStandardMaterial color="#a89a85" envMapIntensity={0.3} />
       </mesh>
       <mesh receiveShadow rotation={[0, -Math.PI / 2, 0]} position={[ROOM_HW, WALL_H / 2, 0]}>
         <planeGeometry args={[ROOM_HD * 2, WALL_H]} />
-        <meshStandardMaterial color="#a89a85" />
+        <meshStandardMaterial color="#a89a85" envMapIntensity={0.3} />
       </mesh>
 
       {/* --- The dressing room door -------------------------------------- */}
@@ -301,7 +476,7 @@ export const Scene = ({ identity, onSignUp }) => {
 
       {/* Once you exist, your name floats over your head */}
       {identity && (
-        <Billboard ref={nameTag} position={[0, 1.8, -4]}>
+        <Billboard ref={nameTag} position={[0, 2.05, -4]}>
           <Text
             fontSize={0.22}
             color="#fff7d6"
@@ -315,23 +490,83 @@ export const Scene = ({ identity, onSignUp }) => {
         </Billboard>
       )}
 
-      {/* The player: a capsule with eyes, so which way it faces is visible.
-          It spawns just outside the dressing room, facing the lobby — which
-          puts its own room exactly at its back. */}
+      {/* The player: the MakeHuman male character, swapped in for the
+          primitive stand-in once its 8.5MB GLB has streamed. It spawns
+          just outside the dressing room, facing the lobby — which puts its
+          own room exactly at its back. */}
       <group ref={player} position={[0, 0, -4]}>
-        <mesh castShadow position={[0, 0.65, 0]}>
-          <capsuleGeometry args={[PLAYER_RADIUS, 0.6, 8, 16]} />
-          <meshStandardMaterial color="#d95926" />
-        </mesh>
-        <mesh position={[-0.13, 0.95, 0.28]}>
-          <sphereGeometry args={[0.07, 12, 12]} />
-          <meshStandardMaterial color="#1a1a2e" />
-        </mesh>
-        <mesh position={[0.13, 0.95, 0.28]}>
-          <sphereGeometry args={[0.07, 12, 12]} />
-          <meshStandardMaterial color="#1a1a2e" />
-        </mesh>
+        <CharacterBoundary>
+          <Suspense fallback={<PlaceholderFigure />}>
+            <Character url={MODEL_URL} motion={paceRef} />
+          </Suspense>
+        </CharacterBoundary>
+      </group>
+
+      {/* The receptionist, standing behind the desk facing the room. The
+          stand-in holds her spot while her GLB streams, so the desk never
+          looks unstaffed. */}
+      <group ref={receptionist} position={[5.5, 0, -5.6]}>
+        <CharacterBoundary>
+          <Suspense fallback={<PlaceholderFigure />}>
+            <Character url={RECEPTIONIST_URL} />
+          </Suspense>
+        </CharacterBoundary>
       </group>
     </>
   )
 }
+
+// The stand-in shown while the GLB streams: a small figure in the enby
+// flag's stripes, eyes marking which way it faces.
+const PlaceholderFigure = () => (
+  <>
+    {/* Legs: the flag's black stripe */}
+    <mesh castShadow position={[-0.12, 0.25, 0]}>
+      <cylinderGeometry args={[0.09, 0.09, 0.5, 10]} />
+      <meshStandardMaterial color="#2c2c2c" />
+    </mesh>
+    <mesh castShadow position={[0.12, 0.25, 0]}>
+      <cylinderGeometry args={[0.09, 0.09, 0.5, 10]} />
+      <meshStandardMaterial color="#2c2c2c" />
+    </mesh>
+    {/* Torso: purple, white, yellow stripes reading upward */}
+    <mesh castShadow position={[0, 0.6, 0]}>
+      <cylinderGeometry args={[0.27, 0.29, 0.22, 16]} />
+      <meshStandardMaterial color="#9c59d1" />
+    </mesh>
+    <mesh castShadow position={[0, 0.81, 0]}>
+      <cylinderGeometry args={[0.26, 0.27, 0.22, 16]} />
+      <meshStandardMaterial color="#ffffff" />
+    </mesh>
+    <mesh castShadow position={[0, 1.02, 0]}>
+      <cylinderGeometry args={[0.24, 0.26, 0.22, 16]} />
+      <meshStandardMaterial color="#fcf434" />
+    </mesh>
+    {/* Arms, resting at the sides */}
+    <mesh castShadow position={[-0.32, 0.82, 0]}>
+      <capsuleGeometry args={[0.06, 0.34, 6, 10]} />
+      <meshStandardMaterial color="#ffffff" />
+    </mesh>
+    <mesh castShadow position={[0.32, 0.82, 0]}>
+      <capsuleGeometry args={[0.06, 0.34, 6, 10]} />
+      <meshStandardMaterial color="#ffffff" />
+    </mesh>
+    {/* Head, with a short cropped haircut */}
+    <mesh castShadow position={[0, 1.3, 0]}>
+      <sphereGeometry args={[0.19, 16, 16]} />
+      <meshStandardMaterial color="#e8b98a" />
+    </mesh>
+    <mesh castShadow position={[0, 1.36, -0.03]}>
+      <sphereGeometry args={[0.2, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.55]} />
+      <meshStandardMaterial color="#4a3626" />
+    </mesh>
+    <mesh position={[-0.07, 1.32, 0.16]}>
+      <sphereGeometry args={[0.035, 10, 10]} />
+      <meshStandardMaterial color="#1a1a2e" />
+    </mesh>
+    <mesh position={[0.07, 1.32, 0.16]}>
+      <sphereGeometry args={[0.035, 10, 10]} />
+      <meshStandardMaterial color="#1a1a2e" />
+    </mesh>
+  </>
+)

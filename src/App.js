@@ -19,7 +19,15 @@ function App() {
 
   return (
     <div className="stage">
-      <Canvas shadows camera={{ position: [0, 2.8, 1], fov: 60 }}>
+      {/* ?capture keeps the drawing buffer readable so headless smoke tests
+          can screenshot the canvas; it costs performance, so never default. */}
+      <Canvas
+        shadows
+        camera={{ position: [0, 2.0, -0.6], fov: 60 }}
+        gl={{
+          preserveDrawingBuffer: new URLSearchParams(window.location.search).has('capture'),
+        }}
+      >
         <Scene identity={identity} onSignUp={() => setSigningUp(true)} />
       </Canvas>
       {/* DOM overlays, not part of the Canvas: controls and forms live in HTML. */}

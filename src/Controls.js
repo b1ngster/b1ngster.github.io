@@ -3,9 +3,10 @@ import { input } from './input'
 
 /**
  * The on-screen controls: an analog joystick for the left thumb, Select for
- * the right. Plain absolutely-positioned DOM over the canvas — HTML already
- * knows how to be hit-tested and made round, none of which is worth
- * re-implementing in WebGL.
+ * the right, and a full-screen look layer underneath both — dragging
+ * anywhere that isn't a control orbits the camera. Plain absolutely-
+ * positioned DOM over the canvas — HTML already knows how to be hit-tested
+ * and made round, none of which is worth re-implementing in WebGL.
  */
 
 // How far (in px) the knob may travel from the centre of the base. Also the
@@ -121,9 +122,76 @@ function SelectButton() {
   )
 }
 
+// Touch to rotate and pinch to zoom: one finger (or a mouse drag) orbits
+// the camera via input.look; two fingers zoom via input.zoom; a mouse
+// wheel zooms too. The layer sits under the joystick and buttons, so it
+// only sees pointers they didn't claim.
+function LookLayer() {
+  // pointerId -> {x, y} for every touch currently on the layer.
+  const pointers = useRef(new Map())
+  const pinchDist = useRef(0)
+
+  const distance = () => {
+    const [a, b] = [...pointers.current.values()]
+    return Math.hypot(a.x - b.x, a.y - b.y)
+  }
+
+  const grab = (event) => {
+    pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    if (pointers.current.size === 2) pinchDist.current = distance()
+    try {
+      event.currentTarget.setPointerCapture?.(event.pointerId)
+    } catch {
+      /* the drag still counts */
+    }
+  }
+
+  const drag = (event) => {
+    const point = pointers.current.get(event.pointerId)
+    if (!point) return
+    const dx = event.clientX - point.x
+    point.x = event.clientX
+    point.y = event.clientY
+
+    if (pointers.current.size >= 2) {
+      // Two fingers: spreading them zooms in, closing zooms out. Ignore
+      // horizontal motion — pinching shouldn't also spin the room.
+      const dist = distance()
+      input.zoom += dist - pinchDist.current
+      pinchDist.current = dist
+    } else {
+      input.look += dx
+    }
+  }
+
+  const release = (event) => {
+    pointers.current.delete(event.pointerId)
+    // Back down to one finger: it becomes a fresh look-drag from where it
+    // stands, not a jump from where the pinch began.
+    if (pointers.current.size === 2) pinchDist.current = distance()
+  }
+
+  return (
+    <div
+      className="look-layer"
+      aria-hidden="true"
+      onPointerDown={grab}
+      onPointerMove={drag}
+      onPointerUp={release}
+      onPointerCancel={release}
+      onWheel={(event) => {
+        // Wheel-up (negative deltaY) zooms in, matching every map app.
+        input.zoom -= event.deltaY * 0.4
+      }}
+      onContextMenu={(event) => event.preventDefault()}
+    />
+  )
+}
+
 export function Controls() {
   return (
     <div className="controls">
+      <LookLayer />
       <Joystick />
       <div className="actions">
         <SelectButton />

@@ -10,6 +10,13 @@ export const input = {
   x: 0,
   y: 0,
   select: false,
+  // Horizontal drag distance (in px) accumulated since the scene last
+  // consumed it — dragging anywhere that isn't a control orbits the camera.
+  // The scene reads it every frame and zeroes it.
+  look: 0,
+  // Zoom accumulated the same way: pinch spread (px) and wheel ticks both
+  // land here. Positive brings the camera closer.
+  zoom: 0,
 }
 
 // Keyboard equivalents, so the scene is playable on a desktop where an
