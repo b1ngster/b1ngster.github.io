@@ -49,7 +49,7 @@ const pulseEnvelope = (times, t, tau, window) => {
 // The GLB filenames are stable across deploys, so a version tag busts
 // browser caches whenever a model is re-exported — bump it on every model
 // change or clients keep their cached copy for however long they please.
-const MODEL_VERSION = 10
+const MODEL_VERSION = 11
 const MODEL_URL = `${process.env.PUBLIC_URL}/models/male.glb?v=${MODEL_VERSION}`
 const RECEPTIONIST_URL = `${process.env.PUBLIC_URL}/models/female.glb?v=${MODEL_VERSION}`
 
@@ -107,7 +107,7 @@ const singFrame = (s, elapsed, dt) => {
   }
 
   if (s.jaw) {
-    s.jawAngle = THREE.MathUtils.damp(s.jawAngle, open * 0.16, 18, dt)
+    s.jawAngle = THREE.MathUtils.damp(s.jawAngle, open * 0.3, 18, dt)
     s.jaw.quaternion.copy(s.jawRest)
     s.jaw.rotateX(s.jawAngle)
   }
@@ -120,7 +120,18 @@ const singFrame = (s, elapsed, dt) => {
 // needs a GLB whose body mesh carries the vis_*/exp_* morph targets.
 const Character = ({ url, motion, sing }) => {
   const { scene, animations } = useGLTF(url)
-  const { actions } = useAnimations(animations, scene)
+  // A singer's jaw belongs to singFrame alone: the idle clip keys every
+  // bone, so its rest-pose jaw track would fight the sung opening within
+  // each frame. Strip it (on clones — useGLTF caches the originals).
+  const clips = useMemo(() => {
+    if (!sing) return animations
+    return animations.map((clip) => {
+      const c = clip.clone()
+      c.tracks = c.tracks.filter((t) => !t.name.startsWith('jaw.'))
+      return c
+    })
+  }, [animations, sing])
+  const { actions } = useAnimations(clips, scene)
   useMemo(() => {
     scene.traverse((obj) => {
       if (obj.isMesh) {
@@ -383,8 +394,12 @@ export const Scene = ({ identity, onSignUp }) => {
     const downbeatEnv = pulseEnvelope(GROOVE_DOWNBEATS, loopT, 0.18, 0.6)
 
     if (receptionist.current) {
-      receptionist.current.position.y = Math.sin(beatPhase) * 0.006 + accentEnv * 0.03
-      receptionist.current.rotation.y = Math.sin(beatPhase) * 0.015 + accentEnv * 0.05
+      // Groove, not pogo: a hint of lift on accents and a slow sway. The
+      // per-beat vertical sin read as odd full-body bouncing at 2.5Hz.
+      // 32 whole sway cycles per loop keeps the phase continuous at the wrap.
+      const swayPhase = (loopT / GROOVE_DURATION) * Math.PI * 2 * 32
+      receptionist.current.position.y = accentEnv * 0.008
+      receptionist.current.rotation.y = Math.sin(swayPhase) * 0.02 + accentEnv * 0.03
     }
     if (lamp.current) {
       lamp.current.intensity = 0.9 + downbeatEnv * 0.12 + accentEnv * 0.28
