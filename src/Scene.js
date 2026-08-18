@@ -6,6 +6,7 @@ import * as THREE from 'three'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment'
 import { input, attachKeyboard } from './input'
 import midnightSun from './timing/midnightSun.json'
+import { createSinger } from './faceScore'
 
 // Timing lifted straight from the "Midnight Sun" Renoise project: chord
 // changes (accents) and bass note onsets (downbeats), in seconds. No audio
@@ -53,63 +54,30 @@ const MODEL_VERSION = 11
 const MODEL_URL = `${process.env.PUBLIC_URL}/models/male.glb?v=${MODEL_VERSION}`
 const RECEPTIONIST_URL = `${process.env.PUBLIC_URL}/models/female.glb?v=${MODEL_VERSION}`
 
-// The receptionist "sings" Midnight Sun: each melody note picks a viseme
-// morph (by pitch class) and cracks the jaw bone open, so teeth and tongue
-// follow through their skin weights; chord-change accents raise a smile and
-// the brows. All silent — the room's groove made visible on a face.
-const MELODY = midnightSun.melody || []
-const VISEME_BY_PITCH = ['vis_open', 'vis_spread', 'vis_pucker']
-
+// The receptionist "sings" Midnight Sun. faceScore turns the Renoise
+// project's own performance data — velocity, legato, octave doubles, the
+// violins' vibrato LFO, phrase gaps, pan spread — into morph goals plus
+// jaw and head-lean channels; this side only smooths them onto the rig.
 const singFrame = (s, elapsed, dt) => {
-  const t = elapsed % GROOVE_DURATION
   const dict = s.mesh.morphTargetDictionary
   const inf = s.mesh.morphTargetInfluences
+  const g = s.singer.sample(elapsed, dt)
 
-  // Cached-pointer scan: notes are sorted, so only ever step forward, and
-  // rewind when the silent loop wraps.
-  if (t < s.lastT) s.noteIdx = 0
-  s.lastT = t
-  while (
-    s.noteIdx < MELODY.length &&
-    MELODY[s.noteIdx][0] + MELODY[s.noteIdx][1] < t - 0.05
-  ) s.noteIdx++
-
-  let open = 0
-  let visemeName = null
-  const n = MELODY[s.noteIdx]
-  if (n && t >= n[0] - 0.03 && t <= n[0] + n[1]) {
-    const [start, dur, pitch] = n
-    const attack = Math.min(1, (t - start + 0.03) / 0.06)
-    const release = Math.min(1, Math.max(0, (start + dur - t) / 0.09))
-    open = attack * (0.35 + 0.65 * release)
-    visemeName = VISEME_BY_PITCH[pitch % VISEME_BY_PITCH.length]
-  }
-
-  const accentEnv = pulseEnvelope(GROOVE_ACCENTS, t, 0.55, 2.2)
-  // A 120ms blink every few seconds, offset so it rarely lands mid-phrase.
-  const bt = (t + 1.7) % 4.3
-  const blink = bt < 0.12 ? Math.sin((bt / 0.12) * Math.PI) : 0
-
-  const goals = {
-    vis_open: visemeName === 'vis_open' ? open : 0,
-    vis_spread: visemeName === 'vis_spread' ? open * 0.9 : 0,
-    vis_pucker: visemeName === 'vis_pucker' ? open * 0.9 : 0,
-    vis_press: 0,
-    exp_soft: 0.35, // resting warmth so the face never goes fully blank
-    exp_smile: accentEnv * 0.6,
-    exp_brows_up: accentEnv > 0.85 ? (accentEnv - 0.85) * 3 : 0,
-    exp_blink: blink,
-  }
-  for (const name in goals) {
+  for (const name in g) {
     const i = dict[name]
-    if (i === undefined) continue
-    inf[i] = THREE.MathUtils.damp(inf[i], goals[name], 18, dt)
+    if (i === undefined) continue // jaw/tilt aren't morphs; old GLBs lack some
+    inf[i] = THREE.MathUtils.damp(inf[i], g[name], 18, dt)
   }
 
   if (s.jaw) {
-    s.jawAngle = THREE.MathUtils.damp(s.jawAngle, open * 0.3, 18, dt)
+    s.jawAngle = THREE.MathUtils.damp(s.jawAngle, g.jaw, 18, dt)
     s.jaw.quaternion.copy(s.jawRest)
     s.jaw.rotateX(s.jawAngle)
+  }
+  if (s.neck) {
+    s.tilt = THREE.MathUtils.damp(s.tilt, g.tilt, 4, dt)
+    s.neck.quaternion.copy(s.neckRest)
+    s.neck.rotateZ(s.tilt)
   }
 }
 
@@ -120,14 +88,16 @@ const singFrame = (s, elapsed, dt) => {
 // needs a GLB whose body mesh carries the vis_*/exp_* morph targets.
 const Character = ({ url, motion, sing }) => {
   const { scene, animations } = useGLTF(url)
-  // A singer's jaw belongs to singFrame alone: the idle clip keys every
-  // bone, so its rest-pose jaw track would fight the sung opening within
-  // each frame. Strip it (on clones — useGLTF caches the originals).
+  // A singer's jaw and head-lean bones belong to singFrame alone: the idle
+  // clip keys every bone, so its rest-pose tracks would fight the sung
+  // motion within each frame. Strip them (on clones — useGLTF caches the
+  // originals).
   const clips = useMemo(() => {
     if (!sing) return animations
     return animations.map((clip) => {
       const c = clip.clone()
-      c.tracks = c.tracks.filter((t) => !t.name.startsWith('jaw.'))
+      c.tracks = c.tracks.filter(
+        (t) => !t.name.startsWith('jaw.') && !t.name.startsWith('neck03.'))
       return c
     })
   }, [animations, sing])
@@ -151,13 +121,16 @@ const Character = ({ url, motion, sing }) => {
     })
     if (!mesh) return null // old GLB without morphs: sway only, no singing
     const jaw = scene.getObjectByName('jaw')
+    const neck = scene.getObjectByName('neck03')
     return {
       mesh,
       jaw,
       jawRest: jaw ? jaw.quaternion.clone() : null,
       jawAngle: 0,
-      noteIdx: 0,
-      lastT: 0,
+      neck,
+      neckRest: neck ? neck.quaternion.clone() : null,
+      tilt: 0,
+      singer: createSinger(midnightSun),
     }
   }, [scene, sing])
 
