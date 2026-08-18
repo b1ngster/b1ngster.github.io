@@ -49,14 +49,76 @@ const pulseEnvelope = (times, t, tau, window) => {
 // The GLB filenames are stable across deploys, so a version tag busts
 // browser caches whenever a model is re-exported — bump it on every model
 // change or clients keep their cached copy for however long they please.
-const MODEL_VERSION = 9
+const MODEL_VERSION = 10
 const MODEL_URL = `${process.env.PUBLIC_URL}/models/male.glb?v=${MODEL_VERSION}`
 const RECEPTIONIST_URL = `${process.env.PUBLIC_URL}/models/female.glb?v=${MODEL_VERSION}`
+
+// The receptionist "sings" Midnight Sun: each melody note picks a viseme
+// morph (by pitch class) and cracks the jaw bone open, so teeth and tongue
+// follow through their skin weights; chord-change accents raise a smile and
+// the brows. All silent — the room's groove made visible on a face.
+const MELODY = midnightSun.melody || []
+const VISEME_BY_PITCH = ['vis_open', 'vis_spread', 'vis_pucker']
+
+const singFrame = (s, elapsed, dt) => {
+  const t = elapsed % GROOVE_DURATION
+  const dict = s.mesh.morphTargetDictionary
+  const inf = s.mesh.morphTargetInfluences
+
+  // Cached-pointer scan: notes are sorted, so only ever step forward, and
+  // rewind when the silent loop wraps.
+  if (t < s.lastT) s.noteIdx = 0
+  s.lastT = t
+  while (
+    s.noteIdx < MELODY.length &&
+    MELODY[s.noteIdx][0] + MELODY[s.noteIdx][1] < t - 0.05
+  ) s.noteIdx++
+
+  let open = 0
+  let visemeName = null
+  const n = MELODY[s.noteIdx]
+  if (n && t >= n[0] - 0.03 && t <= n[0] + n[1]) {
+    const [start, dur, pitch] = n
+    const attack = Math.min(1, (t - start + 0.03) / 0.06)
+    const release = Math.min(1, Math.max(0, (start + dur - t) / 0.09))
+    open = attack * (0.35 + 0.65 * release)
+    visemeName = VISEME_BY_PITCH[pitch % VISEME_BY_PITCH.length]
+  }
+
+  const accentEnv = pulseEnvelope(GROOVE_ACCENTS, t, 0.55, 2.2)
+  // A 120ms blink every few seconds, offset so it rarely lands mid-phrase.
+  const bt = (t + 1.7) % 4.3
+  const blink = bt < 0.12 ? Math.sin((bt / 0.12) * Math.PI) : 0
+
+  const goals = {
+    vis_open: visemeName === 'vis_open' ? open : 0,
+    vis_spread: visemeName === 'vis_spread' ? open * 0.9 : 0,
+    vis_pucker: visemeName === 'vis_pucker' ? open * 0.9 : 0,
+    vis_press: 0,
+    exp_soft: 0.35, // resting warmth so the face never goes fully blank
+    exp_smile: accentEnv * 0.6,
+    exp_brows_up: accentEnv > 0.85 ? (accentEnv - 0.85) * 3 : 0,
+    exp_blink: blink,
+  }
+  for (const name in goals) {
+    const i = dict[name]
+    if (i === undefined) continue
+    inf[i] = THREE.MathUtils.damp(inf[i], goals[name], 18, dt)
+  }
+
+  if (s.jaw) {
+    s.jawAngle = THREE.MathUtils.damp(s.jawAngle, open * 0.16, 18, dt)
+    s.jaw.quaternion.copy(s.jawRest)
+    s.jaw.rotateX(s.jawAngle)
+  }
+}
 
 // `motion` is an optional ref holding the current pace (0..1). With one, the
 // walk clip fades in and speeds up with movement; without one (or without
 // clips in the GLB) the character just breathes through its idle loop.
-const Character = ({ url, motion }) => {
+// `sing` opts the character into the Midnight Sun face performance — it
+// needs a GLB whose body mesh carries the vis_*/exp_* morph targets.
+const Character = ({ url, motion, sing }) => {
   const { scene, animations } = useGLTF(url)
   const { actions } = useAnimations(animations, scene)
   useMemo(() => {
@@ -68,6 +130,26 @@ const Character = ({ url, motion }) => {
     })
   }, [scene])
 
+  const singState = useMemo(() => {
+    if (!sing) return null
+    let mesh = null
+    scene.traverse((o) => {
+      if (o.isMesh && o.morphTargetDictionary && 'vis_open' in o.morphTargetDictionary) {
+        mesh = o
+      }
+    })
+    if (!mesh) return null // old GLB without morphs: sway only, no singing
+    const jaw = scene.getObjectByName('jaw')
+    return {
+      mesh,
+      jaw,
+      jawRest: jaw ? jaw.quaternion.clone() : null,
+      jawAngle: 0,
+      noteIdx: 0,
+      lastT: 0,
+    }
+  }, [scene, sing])
+
   useEffect(() => {
     actions.idle?.play()
     if (actions.walk) {
@@ -76,7 +158,10 @@ const Character = ({ url, motion }) => {
     }
   }, [actions])
 
-  useFrame((_, delta) => {
+  useFrame((state, delta) => {
+    if (singState) {
+      singFrame(singState, state.clock.elapsedTime, Math.min(delta, 0.05))
+    }
     const walk = actions.walk
     if (!walk || !motion) return
     const dt = Math.min(delta, 0.05)
@@ -508,7 +593,7 @@ export const Scene = ({ identity, onSignUp }) => {
       <group ref={receptionist} position={[5.5, 0, -5.6]}>
         <CharacterBoundary>
           <Suspense fallback={<PlaceholderFigure />}>
-            <Character url={RECEPTIONIST_URL} />
+            <Character url={RECEPTIONIST_URL} sing />
           </Suspense>
         </CharacterBoundary>
       </group>
