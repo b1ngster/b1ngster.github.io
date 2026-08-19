@@ -299,6 +299,11 @@ export const Scene = ({ identity, onSignUp }) => {
 
   const [doorOpen, setDoorOpen] = useState(false)
   const [nearDoor, setNearDoor] = useState(false)
+  // The activity room, off the left wall: no identity gate, Select just
+  // opens it.
+  const actDoor = useRef()
+  const [actDoorOpen, setActDoorOpen] = useState(false)
+  const [nearActDoor, setNearActDoor] = useState(false)
 
   useEffect(attachKeyboard, [])
 
@@ -377,22 +382,33 @@ export const Scene = ({ identity, onSignUp }) => {
       }
     }
 
-    // --- The door, only within arm's reach -----------------------------
+    // --- The doors, only within arm's reach ----------------------------
     const doorDistance = Math.hypot(body.position.x, body.position.z + ROOM_HD)
     const near = doorDistance < NEAR_DISTANCE
     if (near !== nearDoor) setNearDoor(near)
+    const actDistance = Math.hypot(body.position.x + ROOM_HW, body.position.z)
+    const nearAct = actDistance < NEAR_DISTANCE
+    if (nearAct !== nearActDoor) setNearActDoor(nearAct)
 
-    if (input.select && !selectWasDown.current && near) {
-      // No identity yet: the door stays shut and Select hands you the
-      // sign-up card instead. The door opens when the form comes back filled.
-      if (identity) setDoorOpen((open) => !open)
-      else onSignUp()
+    if (input.select && !selectWasDown.current) {
+      if (near) {
+        // No identity yet: the door stays shut and Select hands you the
+        // sign-up card instead. The door opens when the form comes back filled.
+        if (identity) setDoorOpen((open) => !open)
+        else onSignUp()
+      } else if (nearAct) {
+        setActDoorOpen((open) => !open)
+      }
     }
     selectWasDown.current = input.select
 
-    // Slide, don't snap: the door eases sideways into the wall.
+    // Slide, don't snap: the doors ease sideways into their walls.
     door.current.position.x = THREE.MathUtils.damp(
       door.current.position.x, doorOpen ? DOOR_W + 0.15 : 0, 8, dt)
+    if (actDoor.current) {
+      actDoor.current.position.z = THREE.MathUtils.damp(
+        actDoor.current.position.z, actDoorOpen ? DOOR_W + 0.15 : 0, 8, dt)
+    }
 
     // --- Third-person camera -------------------------------------------
     // A shoulder offset that orbits only when dragged, never with the
@@ -440,8 +456,10 @@ export const Scene = ({ identity, onSignUp }) => {
   })
 
   // The wall around the doorway: a segment either side plus a lintel above,
-  // leaving a real gap the door slides across.
+  // leaving a real gap the door slides across. Same trick on the left wall
+  // for the activity room, with depth taking width's place.
   const sideW = ROOM_HW - DOOR_W / 2
+  const sideD = ROOM_HD - DOOR_W / 2
 
   return (
     <>
@@ -491,14 +509,77 @@ export const Scene = ({ identity, onSignUp }) => {
         <planeGeometry args={[ROOM_HW * 2, WALL_H]} />
         <meshStandardMaterial color="#a89a85" envMapIntensity={0.3} />
       </mesh>
-      <mesh receiveShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW, WALL_H / 2, 0]}>
-        <planeGeometry args={[ROOM_HD * 2, WALL_H]} />
+      {/* Left wall, in three pieces around the activity room doorway */}
+      <mesh receiveShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW, WALL_H / 2, -(DOOR_W / 2 + sideD / 2)]}>
+        <planeGeometry args={[sideD, WALL_H]} />
+        <meshStandardMaterial color="#a89a85" envMapIntensity={0.3} />
+      </mesh>
+      <mesh receiveShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW, WALL_H / 2, DOOR_W / 2 + sideD / 2]}>
+        <planeGeometry args={[sideD, WALL_H]} />
+        <meshStandardMaterial color="#a89a85" envMapIntensity={0.3} />
+      </mesh>
+      <mesh receiveShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW, DOOR_H + (WALL_H - DOOR_H) / 2, 0]}>
+        <planeGeometry args={[DOOR_W, WALL_H - DOOR_H]} />
         <meshStandardMaterial color="#a89a85" envMapIntensity={0.3} />
       </mesh>
       <mesh receiveShadow rotation={[0, -Math.PI / 2, 0]} position={[ROOM_HW, WALL_H / 2, 0]}>
         <planeGeometry args={[ROOM_HD * 2, WALL_H]} />
         <meshStandardMaterial color="#a89a85" envMapIntensity={0.3} />
       </mesh>
+
+      {/* --- The activity room door -------------------------------------- */}
+      {/* The dark of the activity room, glimpsed through the gap when open */}
+      <mesh rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW - 0.5, DOOR_H / 2, 0]}>
+        <planeGeometry args={[DOOR_W + 1.2, DOOR_H + 0.6]} />
+        <meshStandardMaterial color="#07080c" />
+      </mesh>
+      <Text
+        rotation={[0, Math.PI / 2, 0]}
+        position={[-ROOM_HW - 0.45, 1.5, 0]}
+        fontSize={0.24}
+        color="#5f8f6f"
+        anchorX="center"
+        anchorY="middle"
+      >
+        ACTIVITY ROOM
+      </Text>
+      {/* The door itself, just outside the wall so it can slide in behind it */}
+      <mesh ref={actDoor} castShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW - 0.12, DOOR_H / 2, 0]}>
+        <boxGeometry args={[DOOR_W, DOOR_H, 0.1]} />
+        <meshStandardMaterial
+          color="#2f9d5c"
+          emissive={nearActDoor ? '#2f9d5c' : '#000000'}
+          emissiveIntensity={0.3}
+        />
+      </mesh>
+      {/* The door's plate on the lobby side of the wall */}
+      <Text
+        rotation={[0, Math.PI / 2, 0]}
+        position={[-ROOM_HW + 0.06, 2.78, 0]}
+        fontSize={0.17}
+        color="#d6ffe8"
+        outlineWidth={0.008}
+        outlineColor="#1a2e1a"
+        anchorX="center"
+        anchorY="middle"
+      >
+        ACTIVITY ROOM
+      </Text>
+      {/* The prompt, floating by the door once you are within reach */}
+      {nearActDoor && (
+        <Billboard position={[-ROOM_HW + 0.6, DOOR_H + 0.5, 0]}>
+          <Text
+            fontSize={0.24}
+            color="#d6ffe8"
+            outlineWidth={0.012}
+            outlineColor="#1a2e1a"
+            anchorX="center"
+            anchorY="middle"
+          >
+            {actDoorOpen ? 'SELECT to close' : 'SELECT to open'}
+          </Text>
+        </Billboard>
+      )}
 
       {/* --- The dressing room door -------------------------------------- */}
       {/* The dark of the dressing room, glimpsed through the gap when open */}

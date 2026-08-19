@@ -22,7 +22,7 @@ function App() {
       {/* ?capture keeps the drawing buffer readable so headless smoke tests
           can screenshot the canvas; it costs performance, so never default. */}
       <Canvas
-        shadows
+        shadows="soft"
         camera={{ position: [0, 2.0, -0.6], fov: 60 }}
         gl={{
           preserveDrawingBuffer: new URLSearchParams(window.location.search).has('capture'),
