@@ -50,7 +50,7 @@ const pulseEnvelope = (times, t, tau, window) => {
 // The GLB filenames are stable across deploys, so a version tag busts
 // browser caches whenever a model is re-exported — bump it on every model
 // change or clients keep their cached copy for however long they please.
-const MODEL_VERSION = 11
+const MODEL_VERSION = 12
 const MODEL_URL = `${process.env.PUBLIC_URL}/models/male.glb?v=${MODEL_VERSION}`
 const RECEPTIONIST_URL = `${process.env.PUBLIC_URL}/models/female.glb?v=${MODEL_VERSION}`
 
