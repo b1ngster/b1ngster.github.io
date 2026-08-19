@@ -1,6 +1,6 @@
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { Billboard, Text, useAnimations, useGLTF } from '@react-three/drei'
+import { Billboard, ContactShadows, Text, useAnimations, useGLTF, useTexture } from '@react-three/drei'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment'
@@ -50,7 +50,7 @@ const pulseEnvelope = (times, t, tau, window) => {
 // The GLB filenames are stable across deploys, so a version tag busts
 // browser caches whenever a model is re-exported — bump it on every model
 // change or clients keep their cached copy for however long they please.
-const MODEL_VERSION = 13
+const MODEL_VERSION = 14
 const MODEL_URL = `${process.env.PUBLIC_URL}/models/male.glb?v=${MODEL_VERSION}`
 const RECEPTIONIST_URL = `${process.env.PUBLIC_URL}/models/female.glb?v=${MODEL_VERSION}`
 
@@ -270,6 +270,12 @@ const DOOR_W = 2
 const DOOR_H = 2.6
 const NEAR_DISTANCE = 2.6 // close enough for Select to reach the door
 
+// The wall around each doorway: a segment either side plus a lintel above,
+// leaving a real gap the door slides across. sideW spans the back wall's
+// x, sideD the left wall's z.
+const sideW = ROOM_HW - DOOR_W / 2
+const sideD = ROOM_HD - DOOR_W / 2
+
 // Solid furniture the player runs into, not through: axis-aligned footprints
 // as [centreX, centreZ, halfX, halfZ].
 const COLLIDERS = [
@@ -278,6 +284,193 @@ const COLLIDERS = [
   [-8.2, -6.2, 0.5, 0.5], // plant, far corner
   [8.2, 6.2, 0.5, 0.5], // plant, near corner
 ]
+
+// --- Room surfaces: CC0 PBR texture sets, self-hosted under public/ ------
+// (never a runtime CDN — an unreachable third-party host once blanked the
+// whole site on iPad). Loaded through Suspense with the flat-colour shell
+// as both loading fallback and error fallback, so a failed fetch degrades
+// to the old look instead of unmounting the canvas.
+const TEX = (name) => `${process.env.PUBLIC_URL}/textures/${name}.webp`
+const ROOM_TEXTURES = {
+  floorDiff: TEX('wood_floor_worn_diff'),
+  floorNor: TEX('wood_floor_worn_nor_gl'),
+  floorRough: TEX('wood_floor_worn_rough'),
+  wallDiff: TEX('painted_plaster_wall_diff'),
+  wallNor: TEX('painted_plaster_wall_nor_gl'),
+  wallRough: TEX('painted_plaster_wall_rough'),
+  rugDiff: TEX('fabric_pattern_07_diff'),
+  rugNor: TEX('fabric_pattern_07_nor_gl'),
+  rugRough: TEX('fabric_pattern_07_rough'),
+  deskDiff: TEX('dark_wood_diff'),
+  deskNor: TEX('dark_wood_nor_gl'),
+  deskRough: TEX('dark_wood_rough'),
+}
+const TEXTURE_REPEATS = { floor: [6, 5], wall: [5, 1.2], rug: [2.5, 2.5], desk: [1.5, 1] }
+
+const useRoomMaps = () => {
+  const maps = useTexture(ROOM_TEXTURES)
+  return useMemo(() => {
+    for (const key in maps) {
+      const t = maps[key]
+      const [rx, ry] = TEXTURE_REPEATS[key.replace(/Diff|Nor|Rough/, '')]
+      t.wrapS = t.wrapT = THREE.RepeatWrapping
+      t.repeat.set(rx, ry)
+      t.anisotropy = 4
+      if (key.endsWith('Diff')) t.encoding = THREE.sRGBEncoding
+    }
+    return maps
+  }, [maps])
+}
+
+// A surface material: full PBR when the maps are in, plain tinted colour
+// when they are not (loading, or failed). The tint multiplies the map, so
+// the room keeps its palette either way.
+const SurfaceMaterial = ({ maps, base, color, roughness, normalScale = 0.7 }) =>
+  maps ? (
+    <meshStandardMaterial
+      map={maps[base + 'Diff']}
+      normalMap={maps[base + 'Nor']}
+      roughnessMap={maps[base + 'Rough']}
+      normalScale={[normalScale, normalScale]}
+      color={color}
+      envMapIntensity={0.3}
+    />
+  ) : (
+    <meshStandardMaterial color={color} roughness={roughness ?? 0.9} envMapIntensity={0.3} />
+  )
+
+class AssetBoundary extends React.Component {
+  state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children
+  }
+}
+
+// Everything static about the room box: floor, ceiling, walls with their
+// two doorway gaps, skirting, doorframes, rug, desk, plants. Dynamic
+// pieces (the doors themselves, signage, prompts) stay in Scene.
+const RoomShell = ({ maps }) => (
+  <>
+    <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
+      <planeGeometry args={[ROOM_HW * 2, ROOM_HD * 2]} />
+      <SurfaceMaterial maps={maps} base="floor" color="#b39876" roughness={0.6} />
+    </mesh>
+    <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, WALL_H, 0]}>
+      <planeGeometry args={[ROOM_HW * 2, ROOM_HD * 2]} />
+      <meshStandardMaterial color="#cfc8bc" envMapIntensity={0.3} />
+    </mesh>
+
+    {/* Back wall, in three pieces around the dressing room doorway */}
+    <mesh receiveShadow position={[-(DOOR_W / 2 + sideW / 2), WALL_H / 2, -ROOM_HD]}>
+      <planeGeometry args={[sideW, WALL_H]} />
+      <SurfaceMaterial maps={maps} base="wall" color="#b3a48e" />
+    </mesh>
+    <mesh receiveShadow position={[DOOR_W / 2 + sideW / 2, WALL_H / 2, -ROOM_HD]}>
+      <planeGeometry args={[sideW, WALL_H]} />
+      <SurfaceMaterial maps={maps} base="wall" color="#b3a48e" />
+    </mesh>
+    <mesh receiveShadow position={[0, DOOR_H + (WALL_H - DOOR_H) / 2, -ROOM_HD]}>
+      <planeGeometry args={[DOOR_W, WALL_H - DOOR_H]} />
+      <SurfaceMaterial maps={maps} base="wall" color="#b3a48e" />
+    </mesh>
+
+    {/* Front wall, right wall, and the left wall's three pieces */}
+    <mesh rotation={[0, Math.PI, 0]} position={[0, WALL_H / 2, ROOM_HD]}>
+      <planeGeometry args={[ROOM_HW * 2, WALL_H]} />
+      <SurfaceMaterial maps={maps} base="wall" color="#bdae98" />
+    </mesh>
+    <mesh receiveShadow rotation={[0, -Math.PI / 2, 0]} position={[ROOM_HW, WALL_H / 2, 0]}>
+      <planeGeometry args={[ROOM_HD * 2, WALL_H]} />
+      <SurfaceMaterial maps={maps} base="wall" color="#bdae98" />
+    </mesh>
+    <mesh receiveShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW, WALL_H / 2, -(DOOR_W / 2 + sideD / 2)]}>
+      <planeGeometry args={[sideD, WALL_H]} />
+      <SurfaceMaterial maps={maps} base="wall" color="#bdae98" />
+    </mesh>
+    <mesh receiveShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW, WALL_H / 2, DOOR_W / 2 + sideD / 2]}>
+      <planeGeometry args={[sideD, WALL_H]} />
+      <SurfaceMaterial maps={maps} base="wall" color="#bdae98" />
+    </mesh>
+    <mesh receiveShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW, DOOR_H + (WALL_H - DOOR_H) / 2, 0]}>
+      <planeGeometry args={[DOOR_W, WALL_H - DOOR_H]} />
+      <SurfaceMaterial maps={maps} base="wall" color="#bdae98" />
+    </mesh>
+
+    {/* Skirting boards: the wall-floor junction is where flat rooms give
+        themselves away. Runs skip the two doorway gaps. */}
+    {[
+      [-(DOOR_W / 2 + sideW / 2), -ROOM_HD + 0.03, sideW, 0],
+      [DOOR_W / 2 + sideW / 2, -ROOM_HD + 0.03, sideW, 0],
+      [0, ROOM_HD - 0.03, ROOM_HW * 2, 0],
+      [ROOM_HW - 0.03, -(DOOR_W / 2 + sideD / 2), sideD, 1],
+      [ROOM_HW - 0.03, DOOR_W / 2 + sideD / 2, sideD, 1],
+      [-ROOM_HW + 0.03, -(DOOR_W / 2 + sideD / 2), sideD, 1],
+      [-ROOM_HW + 0.03, DOOR_W / 2 + sideD / 2, sideD, 1],
+    ].map(([a, b, len, side], i) => (
+      <mesh key={i} position={[a, 0.07, b]} rotation={[0, side ? Math.PI / 2 : 0, 0]}>
+        <boxGeometry args={[len, 0.14, 0.05]} />
+        <meshStandardMaterial color="#6f5b43" roughness={0.5} envMapIntensity={0.3} />
+      </mesh>
+    ))}
+
+    {/* Door frames: jambs and header proud of each doorway */}
+    {[
+      { pos: [0, 0, -ROOM_HD], rotY: 0 },
+      { pos: [-ROOM_HW, 0, 0], rotY: Math.PI / 2 },
+    ].map(({ pos, rotY }, i) => (
+      <group key={i} position={pos} rotation={[0, rotY, 0]}>
+        <mesh castShadow position={[-(DOOR_W / 2 + 0.06), DOOR_H / 2, 0]}>
+          <boxGeometry args={[0.12, DOOR_H, 0.22]} />
+          <meshStandardMaterial color="#4a3a28" roughness={0.5} envMapIntensity={0.3} />
+        </mesh>
+        <mesh castShadow position={[DOOR_W / 2 + 0.06, DOOR_H / 2, 0]}>
+          <boxGeometry args={[0.12, DOOR_H, 0.22]} />
+          <meshStandardMaterial color="#4a3a28" roughness={0.5} envMapIntensity={0.3} />
+        </mesh>
+        <mesh castShadow position={[0, DOOR_H + 0.06, 0]}>
+          <boxGeometry args={[DOOR_W + 0.24, 0.12, 0.22]} />
+          <meshStandardMaterial color="#4a3a28" roughness={0.5} envMapIntensity={0.3} />
+        </mesh>
+      </group>
+    ))}
+
+    {/* Furniture (footprints mirrored in COLLIDERS) */}
+    <group position={[5.5, 0, -4.5]}>
+      <mesh castShadow position={[0, 0.5, 0]}>
+        <boxGeometry args={[3, 1, 1]} />
+        <SurfaceMaterial maps={maps} base="desk" color="#8a6f52" roughness={0.5} />
+      </mesh>
+      <mesh castShadow position={[0, 1.02, 0]}>
+        <boxGeometry args={[3.2, 0.08, 1.2]} />
+        <SurfaceMaterial maps={maps} base="desk" color="#b1916a" roughness={0.4} />
+      </mesh>
+    </group>
+    {[[-8.2, -6.2], [8.2, 6.2]].map(([x, z]) => (
+      <group key={`${x},${z}`} position={[x, 0, z]}>
+        <mesh castShadow position={[0, 0.25, 0]}>
+          <cylinderGeometry args={[0.32, 0.26, 0.5, 12]} />
+          <meshStandardMaterial color="#b0603a" roughness={0.8} />
+        </mesh>
+        <mesh castShadow position={[0, 0.85, 0]}>
+          <sphereGeometry args={[0.45, 12, 12]} />
+          <meshStandardMaterial color="#3fae6a" roughness={0.9} />
+        </mesh>
+      </group>
+    ))}
+    {/* A rug, so the floor visibly slides past while running */}
+    <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
+      <circleGeometry args={[2.6, 32]} />
+      <SurfaceMaterial maps={maps} base="rug" color="#9c4a58" />
+    </mesh>
+  </>
+)
+
+const TexturedRoomShell = () => <RoomShell maps={useRoomMaps()} />
 
 export const Scene = ({ identity, onSignUp }) => {
   const player = useRef()
@@ -455,77 +648,50 @@ export const Scene = ({ identity, onSignUp }) => {
     }
   })
 
-  // The wall around the doorway: a segment either side plus a lintel above,
-  // leaving a real gap the door slides across. Same trick on the left wall
-  // for the activity room, with depth taking width's place.
-  const sideW = ROOM_HW - DOOR_W / 2
-  const sideD = ROOM_HD - DOOR_W / 2
-
   return (
     <>
       <color attach="background" args={['#15181e']} />
       {/* Image-based lighting, so the character's skin and cloth pick up
           believable bounce light instead of flat lamp shading. */}
       <RoomLighting />
-      <ambientLight intensity={0.35} />
-      {/* The main ceiling lamp; the only shadow-caster, which one room can afford. */}
-      <pointLight
+      <ambientLight intensity={0.22} />
+      {/* The key: a warm ceiling spot, the only shadow-caster one room can
+          afford. A spot rather than a bare point so light falls off toward
+          the walls the way a real fixture's does. */}
+      <spotLight
         ref={lamp}
         castShadow
-        position={[0, WALL_H - 0.6, 0]}
-        intensity={0.9}
-        distance={24}
+        position={[0, WALL_H - 0.4, 0]}
+        angle={1.15}
+        penumbra={0.65}
+        intensity={1.1}
+        distance={26}
+        color="#fff2e0"
         shadow-mapSize={[2048, 2048]}
         shadow-bias={-0.0004}
       />
+      {/* A cool, dim fill from the front-left so shadowed sides read as
+          bounce light rather than dropping to flat ambient grey. */}
+      <directionalLight position={[-6, 3, 5]} intensity={0.18} color="#c8d4e8" />
       <pointLight position={[5.5, WALL_H - 1, -4]} intensity={0.35} distance={10} color="#ffe9c4" />
+      {/* Soft blob shadows pooled under the characters and furniture —
+          grounding is the cheapest single realism win a scene can buy. */}
+      <ContactShadows
+        position={[0, 0.015, -2]}
+        scale={18}
+        far={2.2}
+        blur={2.4}
+        opacity={0.45}
+        resolution={256}
+        frames={Infinity}
+      />
 
-      {/* --- The room shell: single-sided planes facing inward ---------- */}
-      <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[ROOM_HW * 2, ROOM_HD * 2]} />
-        <meshStandardMaterial color="#7a5c3e" envMapIntensity={0.3} />
-      </mesh>
-      <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, WALL_H, 0]}>
-        <planeGeometry args={[ROOM_HW * 2, ROOM_HD * 2]} />
-        <meshStandardMaterial color="#cfc8bc" envMapIntensity={0.3} />
-      </mesh>
-
-      {/* Back wall, in three pieces around the doorway */}
-      <mesh receiveShadow position={[-(DOOR_W / 2 + sideW / 2), WALL_H / 2, -ROOM_HD]}>
-        <planeGeometry args={[sideW, WALL_H]} />
-        <meshStandardMaterial color="#9d8f7b" envMapIntensity={0.3} />
-      </mesh>
-      <mesh receiveShadow position={[DOOR_W / 2 + sideW / 2, WALL_H / 2, -ROOM_HD]}>
-        <planeGeometry args={[sideW, WALL_H]} />
-        <meshStandardMaterial color="#9d8f7b" envMapIntensity={0.3} />
-      </mesh>
-      <mesh receiveShadow position={[0, DOOR_H + (WALL_H - DOOR_H) / 2, -ROOM_HD]}>
-        <planeGeometry args={[DOOR_W, WALL_H - DOOR_H]} />
-        <meshStandardMaterial color="#9d8f7b" envMapIntensity={0.3} />
-      </mesh>
-
-      {/* Front and side walls */}
-      <mesh rotation={[0, Math.PI, 0]} position={[0, WALL_H / 2, ROOM_HD]}>
-        <planeGeometry args={[ROOM_HW * 2, WALL_H]} />
-        <meshStandardMaterial color="#a89a85" envMapIntensity={0.3} />
-      </mesh>
-      {/* Left wall, in three pieces around the activity room doorway */}
-      <mesh receiveShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW, WALL_H / 2, -(DOOR_W / 2 + sideD / 2)]}>
-        <planeGeometry args={[sideD, WALL_H]} />
-        <meshStandardMaterial color="#a89a85" envMapIntensity={0.3} />
-      </mesh>
-      <mesh receiveShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW, WALL_H / 2, DOOR_W / 2 + sideD / 2]}>
-        <planeGeometry args={[sideD, WALL_H]} />
-        <meshStandardMaterial color="#a89a85" envMapIntensity={0.3} />
-      </mesh>
-      <mesh receiveShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW, DOOR_H + (WALL_H - DOOR_H) / 2, 0]}>
-        <planeGeometry args={[DOOR_W, WALL_H - DOOR_H]} />
-        <meshStandardMaterial color="#a89a85" envMapIntensity={0.3} />
-      </mesh>
-      <mesh receiveShadow rotation={[0, -Math.PI / 2, 0]} position={[ROOM_HW, WALL_H / 2, 0]}>
-        <planeGeometry args={[ROOM_HD * 2, WALL_H]} />
-        <meshStandardMaterial color="#a89a85" envMapIntensity={0.3} />
-      </mesh>
+      {/* --- The room shell, textured when the maps arrive --------------- */}
+      <AssetBoundary fallback={<RoomShell maps={null} />}>
+        <Suspense fallback={<RoomShell maps={null} />}>
+          <TexturedRoomShell />
+        </Suspense>
+      </AssetBoundary>
 
       {/* --- The activity room door -------------------------------------- */}
       {/* The dark of the activity room, glimpsed through the gap when open */}
@@ -638,35 +804,6 @@ export const Scene = ({ identity, onSignUp }) => {
       >
         DRESSING ROOM
       </Text>
-
-      {/* --- Furniture (footprints mirrored in COLLIDERS) ---------------- */}
-      <group position={[5.5, 0, -4.5]}>
-        <mesh castShadow position={[0, 0.5, 0]}>
-          <boxGeometry args={[3, 1, 1]} />
-          <meshStandardMaterial color="#5b4632" />
-        </mesh>
-        <mesh castShadow position={[0, 1.02, 0]}>
-          <boxGeometry args={[3.2, 0.08, 1.2]} />
-          <meshStandardMaterial color="#8a6d4a" />
-        </mesh>
-      </group>
-      {[[-8.2, -6.2], [8.2, 6.2]].map(([x, z]) => (
-        <group key={`${x},${z}`} position={[x, 0, z]}>
-          <mesh castShadow position={[0, 0.25, 0]}>
-            <cylinderGeometry args={[0.32, 0.26, 0.5, 12]} />
-            <meshStandardMaterial color="#b0603a" />
-          </mesh>
-          <mesh castShadow position={[0, 0.85, 0]}>
-            <sphereGeometry args={[0.45, 12, 12]} />
-            <meshStandardMaterial color="#3fae6a" />
-          </mesh>
-        </group>
-      ))}
-      {/* A rug, so the floor visibly slides past while running */}
-      <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
-        <circleGeometry args={[2.6, 32]} />
-        <meshStandardMaterial color="#8b3a4a" />
-      </mesh>
 
       {/* The prompt, floating by the door once you are within reach */}
       {nearDoor && (
