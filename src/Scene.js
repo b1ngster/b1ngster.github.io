@@ -50,7 +50,7 @@ const pulseEnvelope = (times, t, tau, window) => {
 // The GLB filenames are stable across deploys, so a version tag busts
 // browser caches whenever a model is re-exported — bump it on every model
 // change or clients keep their cached copy for however long they please.
-const MODEL_VERSION = 12
+const MODEL_VERSION = 13
 const MODEL_URL = `${process.env.PUBLIC_URL}/models/male.glb?v=${MODEL_VERSION}`
 const RECEPTIONIST_URL = `${process.env.PUBLIC_URL}/models/female.glb?v=${MODEL_VERSION}`
 
@@ -86,8 +86,11 @@ const singFrame = (s, elapsed, dt) => {
 // clips in the GLB) the character just breathes through its idle loop.
 // `sing` opts the character into the Midnight Sun face performance — it
 // needs a GLB whose body mesh carries the vis_*/exp_* morph targets.
-const Character = ({ url, motion, sing }) => {
+const Character = ({ url, motion, sing, onReady }) => {
   const { scene, animations } = useGLTF(url)
+  // Mounting means the GLB resolved (we render inside Suspense) — let the
+  // intro crossfade know the real character is on stage.
+  useEffect(() => { onReady?.() }, [onReady])
   // A singer's jaw and head-lean bones belong to singFrame alone: the idle
   // clip keys every bone, so its rest-pose tracks would fight the sung
   // motion within each frame. Strip them (on clones — useGLTF caches the
@@ -163,6 +166,63 @@ const Character = ({ url, motion, sing }) => {
 }
 useGLTF.preload(MODEL_URL)
 useGLTF.preload(RECEPTIONIST_URL)
+
+// Crossfades the streaming stand-in into the real character instead of the
+// old hard swap: the placeholder's stripes dissolve while the GLB fades up
+// underneath. Fading needs `transparent`, which breaks the hair's alpha-
+// masked sorting, so every material's original flags are restored the
+// moment the fade lands.
+const setGroupOpacity = (root, k, done) => {
+  root.traverse((o) => {
+    if (!o.isMesh || !o.material) return
+    const m = o.material
+    if (m.userData.introFlags === undefined) {
+      m.userData.introFlags = { transparent: m.transparent, opacity: m.opacity }
+    }
+    if (done) {
+      m.transparent = m.userData.introFlags.transparent
+      m.opacity = m.userData.introFlags.opacity
+    } else {
+      m.transparent = true
+      m.opacity = k
+    }
+  })
+}
+
+const CharacterWithIntro = ({ url, motion, sing }) => {
+  const placeholder = useRef()
+  const model = useRef()
+  const ready = useRef(false)
+  const fade = useRef(0)
+
+  useFrame((state, delta) => {
+    const dt = Math.min(delta, 0.05)
+    fade.current = THREE.MathUtils.damp(fade.current, ready.current ? 1 : 0, 5, dt)
+    const k = fade.current
+    const settled = k > 0.995
+    if (placeholder.current) {
+      placeholder.current.visible = !settled
+      if (!settled) setGroupOpacity(placeholder.current, 1 - k, false)
+    }
+    if (model.current) setGroupOpacity(model.current, k, settled)
+  })
+
+  return (
+    <>
+      <group ref={placeholder}>
+        <PlaceholderFigure />
+      </group>
+      <Suspense fallback={null}>
+        <group ref={model}>
+          <Character
+            url={url} motion={motion} sing={sing}
+            onReady={() => { ready.current = true }}
+          />
+        </group>
+      </Suspense>
+    </>
+  )
+}
 
 // If the GLB fails to load (offline, blocked, corrupted), fall back to the
 // placeholder instead of letting the error unmount the whole canvas.
@@ -569,9 +629,7 @@ export const Scene = ({ identity, onSignUp }) => {
           own room exactly at its back. */}
       <group ref={player} position={[0, 0, -4]}>
         <CharacterBoundary>
-          <Suspense fallback={<PlaceholderFigure />}>
-            <Character url={MODEL_URL} motion={paceRef} />
-          </Suspense>
+          <CharacterWithIntro url={MODEL_URL} motion={paceRef} />
         </CharacterBoundary>
       </group>
 
@@ -580,9 +638,7 @@ export const Scene = ({ identity, onSignUp }) => {
           looks unstaffed. */}
       <group ref={receptionist} position={[5.5, 0, -5.6]}>
         <CharacterBoundary>
-          <Suspense fallback={<PlaceholderFigure />}>
-            <Character url={RECEPTIONIST_URL} sing />
-          </Suspense>
+          <CharacterWithIntro url={RECEPTIONIST_URL} sing />
         </CharacterBoundary>
       </group>
     </>
