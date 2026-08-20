@@ -3,10 +3,12 @@ import './App.css'
 import { Billboard, ContactShadows, Text, useAnimations, useGLTF, useTexture } from '@react-three/drei'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment'
+import { SkeletonUtils } from 'three-stdlib'
+import { CloudField, SKY, HeavenSky } from './heaven'
 import { input, attachKeyboard } from './input'
 import midnightSun from './timing/midnightSun.json'
 import { createSinger } from './faceScore'
+import { modelUrlFor, applyBody, dominantEthnicity, stoopAngle } from './profile'
 
 // Timing lifted straight from the "Midnight Sun" Renoise project: chord
 // changes (accents) and bass note onsets (downbeats), in seconds. No audio
@@ -50,9 +52,11 @@ const pulseEnvelope = (times, t, tau, window) => {
 // The GLB filenames are stable across deploys, so a version tag busts
 // browser caches whenever a model is re-exported — bump it on every model
 // change or clients keep their cached copy for however long they please.
-const MODEL_VERSION = 14
+export const MODEL_VERSION = 20
 const MODEL_URL = `${process.env.PUBLIC_URL}/models/male.glb?v=${MODEL_VERSION}`
-const RECEPTIONIST_URL = `${process.env.PUBLIC_URL}/models/female.glb?v=${MODEL_VERSION}`
+// The receptionist keeps her own copy of the viseme-carrying female —
+// the player models are being replaced by morph-target rebuilds.
+const RECEPTIONIST_URL = `${process.env.PUBLIC_URL}/models/female_reception.glb?v=${MODEL_VERSION}`
 
 // The receptionist "sings" Midnight Sun. faceScore turns the Renoise
 // project's own performance data — velocity, legato, octave doubles, the
@@ -86,24 +90,38 @@ const singFrame = (s, elapsed, dt) => {
 // clips in the GLB) the character just breathes through its idle loop.
 // `sing` opts the character into the Midnight Sun face performance — it
 // needs a GLB whose body mesh carries the vis_*/exp_* morph targets.
-const Character = ({ url, motion, sing, onReady }) => {
-  const { scene, animations } = useGLTF(url)
+const Character = ({ url, motion, sing, body, onReady }) => {
+  const { scene: template, animations } = useGLTF(url)
+  // Clone the cached GLB (SkeletonUtils — plain clone() breaks skinning),
+  // materials included, so the player and the receptionist can wear the
+  // same GLB at once and a skin tint on one never bleeds onto the other.
+  const scene = useMemo(() => {
+    const c = SkeletonUtils.clone(template)
+    c.traverse((o) => {
+      if (o.isMesh && o.material) o.material = o.material.clone()
+    })
+    return c
+  }, [template])
+  // The heavenly onboarding's choices: skin tint, height, and weight.
+  useEffect(() => {
+    if (body) applyBody(scene, body)
+  }, [scene, body])
   // Mounting means the GLB resolved (we render inside Suspense) — let the
   // intro crossfade know the real character is on stage.
   useEffect(() => { onReady?.() }, [onReady])
-  // A singer's jaw and head-lean bones belong to singFrame alone: the idle
-  // clip keys every bone, so its rest-pose tracks would fight the sung
-  // motion within each frame. Strip them (on clones — useGLTF caches the
-  // originals).
-  const clips = useMemo(() => {
-    if (!sing) return animations
-    return animations.map((clip) => {
+  // The clips key every bone's scale with static 1s, which would overwrite
+  // applyBody's skeleton shaping every frame — strip all scale tracks. A
+  // singer's jaw and head-lean bones likewise belong to singFrame alone:
+  // strip their rest-pose tracks too. (On clones — useGLTF caches the
+  // originals.)
+  const clips = useMemo(() =>
+    animations.map((clip) => {
       const c = clip.clone()
-      c.tracks = c.tracks.filter(
-        (t) => !t.name.startsWith('jaw.') && !t.name.startsWith('neck03.'))
+      c.tracks = c.tracks.filter((t) =>
+        !t.name.endsWith('.scale') &&
+        (!sing || (!t.name.startsWith('jaw.') && !t.name.startsWith('neck03.'))))
       return c
-    })
-  }, [animations, sing])
+    }), [animations, sing])
   const { actions } = useAnimations(clips, scene)
   useMemo(() => {
     scene.traverse((obj) => {
@@ -149,6 +167,16 @@ const Character = ({ url, motion, sing, onReady }) => {
     if (singState) {
       singFrame(singState, state.clock.elapsedTime, Math.min(delta, 0.05))
     }
+    // The elder stoop, post-mixer: the clips rewrite every bone rotation
+    // each frame, so the lean is layered back on top. Idempotent — the
+    // mixer resets the quaternion before we rotate it.
+    if (body) {
+      const lean = stoopAngle(body.age ?? 0.5)
+      if (lean > 0.001) {
+        scene.getObjectByName('spine02')?.rotateX(lean)
+        scene.getObjectByName('neck02')?.rotateX(-lean * 0.55)
+      }
+    }
     const walk = actions.walk
     if (!walk || !motion) return
     const dt = Math.min(delta, 0.05)
@@ -189,8 +217,7 @@ const setGroupOpacity = (root, k, done) => {
   })
 }
 
-const CharacterWithIntro = ({ url, motion, sing }) => {
-  const placeholder = useRef()
+const CharacterWithIntro = ({ url, motion, sing, body }) => {
   const model = useRef()
   const ready = useRef(false)
   const fade = useRef(0)
@@ -199,33 +226,23 @@ const CharacterWithIntro = ({ url, motion, sing }) => {
     const dt = Math.min(delta, 0.05)
     fade.current = THREE.MathUtils.damp(fade.current, ready.current ? 1 : 0, 5, dt)
     const k = fade.current
-    const settled = k > 0.995
-    if (placeholder.current) {
-      placeholder.current.visible = !settled
-      if (!settled) setGroupOpacity(placeholder.current, 1 - k, false)
-    }
-    if (model.current) setGroupOpacity(model.current, k, settled)
+    if (model.current) setGroupOpacity(model.current, k, k > 0.995)
   })
 
   return (
-    <>
-      <group ref={placeholder}>
-        <PlaceholderFigure />
+    <Suspense fallback={null}>
+      <group ref={model}>
+        <Character
+          url={url} motion={motion} sing={sing} body={body}
+          onReady={() => { ready.current = true }}
+        />
       </group>
-      <Suspense fallback={null}>
-        <group ref={model}>
-          <Character
-            url={url} motion={motion} sing={sing}
-            onReady={() => { ready.current = true }}
-          />
-        </group>
-      </Suspense>
-    </>
+    </Suspense>
   )
 }
 
-// If the GLB fails to load (offline, blocked, corrupted), fall back to the
-// placeholder instead of letting the error unmount the whole canvas.
+// If the GLB fails to load (offline, blocked, corrupted), show nothing
+// rather than letting the error unmount the whole canvas.
 class CharacterBoundary extends React.Component {
   state = { failed: false }
 
@@ -234,29 +251,8 @@ class CharacterBoundary extends React.Component {
   }
 
   render() {
-    return this.state.failed ? <PlaceholderFigure /> : this.props.children
+    return this.state.failed ? null : this.props.children
   }
-}
-
-// Image-based lighting built on the GPU at startup — no network fetch, so
-// nothing here can fail and blank the page (which is exactly what happened
-// with a CDN-hosted HDR on iPad).
-const RoomLighting = () => {
-  const gl = useThree((state) => state.gl)
-  const scene = useThree((state) => state.scene)
-
-  useEffect(() => {
-    const pmrem = new THREE.PMREMGenerator(gl)
-    const envMap = pmrem.fromScene(new RoomEnvironment()).texture
-    scene.environment = envMap
-    return () => {
-      scene.environment = null
-      envMap.dispose()
-      pmrem.dispose()
-    }
-  }, [gl, scene])
-
-  return null
 }
 
 const ROOM_HW = 9 // half-width of the room, along x
@@ -292,20 +288,11 @@ const COLLIDERS = [
 // to the old look instead of unmounting the canvas.
 const TEX = (name) => `${process.env.PUBLIC_URL}/textures/${name}.webp`
 const ROOM_TEXTURES = {
-  floorDiff: TEX('wood_floor_worn_diff'),
-  floorNor: TEX('wood_floor_worn_nor_gl'),
-  floorRough: TEX('wood_floor_worn_rough'),
-  wallDiff: TEX('painted_plaster_wall_diff'),
-  wallNor: TEX('painted_plaster_wall_nor_gl'),
-  wallRough: TEX('painted_plaster_wall_rough'),
-  rugDiff: TEX('fabric_pattern_07_diff'),
-  rugNor: TEX('fabric_pattern_07_nor_gl'),
-  rugRough: TEX('fabric_pattern_07_rough'),
-  deskDiff: TEX('dark_wood_diff'),
-  deskNor: TEX('dark_wood_nor_gl'),
-  deskRough: TEX('dark_wood_rough'),
+  deskDiff: TEX('marble_01_diff'),
+  deskNor: TEX('marble_01_nor_gl'),
+  deskRough: TEX('marble_01_rough'),
 }
-const TEXTURE_REPEATS = { floor: [6, 5], wall: [5, 1.2], rug: [2.5, 2.5], desk: [1.5, 1] }
+const TEXTURE_REPEATS = { desk: [1.5, 1] }
 
 const useRoomMaps = () => {
   const maps = useTexture(ROOM_TEXTURES)
@@ -351,110 +338,41 @@ class AssetBoundary extends React.Component {
   }
 }
 
-// Everything static about the room box: floor, ceiling, walls with their
-// two doorway gaps, skirting, doorframes, rug, desk, plants. Dynamic
-// pieces (the doors themselves, signage, prompts) stay in Scene.
+// Everything static about the god-lobby: a cloud floor open to the sky —
+// no walls, no ceiling — with a golden halo where the rug used to lie, a
+// marble-and-gold reception desk, gilded planters, and banks of cloud
+// where walls once stood. Dynamic pieces (the gates, signage, prompts)
+// stay in Scene.
 const RoomShell = ({ maps }) => (
   <>
+    {/* the cloud floor, edges dissolving into the banks beyond */}
     <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
-      <planeGeometry args={[ROOM_HW * 2, ROOM_HD * 2]} />
-      <SurfaceMaterial maps={maps} base="floor" color="#b39876" roughness={0.6} />
+      <planeGeometry args={[ROOM_HW * 2 + 16, ROOM_HD * 2 + 16]} />
+      <meshStandardMaterial color="#f2f7fd" roughness={1} />
     </mesh>
-    <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, WALL_H, 0]}>
-      <planeGeometry args={[ROOM_HW * 2, ROOM_HD * 2]} />
-      <meshStandardMaterial color="#cfc8bc" envMapIntensity={0.3} />
-    </mesh>
-
-    {/* Back wall, in three pieces around the dressing room doorway */}
-    <mesh receiveShadow position={[-(DOOR_W / 2 + sideW / 2), WALL_H / 2, -ROOM_HD]}>
-      <planeGeometry args={[sideW, WALL_H]} />
-      <SurfaceMaterial maps={maps} base="wall" color="#b3a48e" />
-    </mesh>
-    <mesh receiveShadow position={[DOOR_W / 2 + sideW / 2, WALL_H / 2, -ROOM_HD]}>
-      <planeGeometry args={[sideW, WALL_H]} />
-      <SurfaceMaterial maps={maps} base="wall" color="#b3a48e" />
-    </mesh>
-    <mesh receiveShadow position={[0, DOOR_H + (WALL_H - DOOR_H) / 2, -ROOM_HD]}>
-      <planeGeometry args={[DOOR_W, WALL_H - DOOR_H]} />
-      <SurfaceMaterial maps={maps} base="wall" color="#b3a48e" />
+    {/* a golden halo inlaid in the cloud, where the rug used to lie */}
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]}>
+      <ringGeometry args={[2.2, 2.6, 48]} />
+      <meshStandardMaterial color="#e8c05a" metalness={0.5} roughness={0.35} />
     </mesh>
 
-    {/* Front wall, right wall, and the left wall's three pieces */}
-    <mesh rotation={[0, Math.PI, 0]} position={[0, WALL_H / 2, ROOM_HD]}>
-      <planeGeometry args={[ROOM_HW * 2, WALL_H]} />
-      <SurfaceMaterial maps={maps} base="wall" color="#bdae98" />
-    </mesh>
-    <mesh receiveShadow rotation={[0, -Math.PI / 2, 0]} position={[ROOM_HW, WALL_H / 2, 0]}>
-      <planeGeometry args={[ROOM_HD * 2, WALL_H]} />
-      <SurfaceMaterial maps={maps} base="wall" color="#bdae98" />
-    </mesh>
-    <mesh receiveShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW, WALL_H / 2, -(DOOR_W / 2 + sideD / 2)]}>
-      <planeGeometry args={[sideD, WALL_H]} />
-      <SurfaceMaterial maps={maps} base="wall" color="#bdae98" />
-    </mesh>
-    <mesh receiveShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW, WALL_H / 2, DOOR_W / 2 + sideD / 2]}>
-      <planeGeometry args={[sideD, WALL_H]} />
-      <SurfaceMaterial maps={maps} base="wall" color="#bdae98" />
-    </mesh>
-    <mesh receiveShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW, DOOR_H + (WALL_H - DOOR_H) / 2, 0]}>
-      <planeGeometry args={[DOOR_W, WALL_H - DOOR_H]} />
-      <SurfaceMaterial maps={maps} base="wall" color="#bdae98" />
-    </mesh>
-
-    {/* Skirting boards: the wall-floor junction is where flat rooms give
-        themselves away. Runs skip the two doorway gaps. */}
-    {[
-      [-(DOOR_W / 2 + sideW / 2), -ROOM_HD + 0.03, sideW, 0],
-      [DOOR_W / 2 + sideW / 2, -ROOM_HD + 0.03, sideW, 0],
-      [0, ROOM_HD - 0.03, ROOM_HW * 2, 0],
-      [ROOM_HW - 0.03, -(DOOR_W / 2 + sideD / 2), sideD, 1],
-      [ROOM_HW - 0.03, DOOR_W / 2 + sideD / 2, sideD, 1],
-      [-ROOM_HW + 0.03, -(DOOR_W / 2 + sideD / 2), sideD, 1],
-      [-ROOM_HW + 0.03, DOOR_W / 2 + sideD / 2, sideD, 1],
-    ].map(([a, b, len, side], i) => (
-      <mesh key={i} position={[a, 0.07, b]} rotation={[0, side ? Math.PI / 2 : 0, 0]}>
-        <boxGeometry args={[len, 0.14, 0.05]} />
-        <meshStandardMaterial color="#6f5b43" roughness={0.5} envMapIntensity={0.3} />
-      </mesh>
-    ))}
-
-    {/* Door frames: jambs and header proud of each doorway */}
-    {[
-      { pos: [0, 0, -ROOM_HD], rotY: 0 },
-      { pos: [-ROOM_HW, 0, 0], rotY: Math.PI / 2 },
-    ].map(({ pos, rotY }, i) => (
-      <group key={i} position={pos} rotation={[0, rotY, 0]}>
-        <mesh castShadow position={[-(DOOR_W / 2 + 0.06), DOOR_H / 2, 0]}>
-          <boxGeometry args={[0.12, DOOR_H, 0.22]} />
-          <meshStandardMaterial color="#4a3a28" roughness={0.5} envMapIntensity={0.3} />
-        </mesh>
-        <mesh castShadow position={[DOOR_W / 2 + 0.06, DOOR_H / 2, 0]}>
-          <boxGeometry args={[0.12, DOOR_H, 0.22]} />
-          <meshStandardMaterial color="#4a3a28" roughness={0.5} envMapIntensity={0.3} />
-        </mesh>
-        <mesh castShadow position={[0, DOOR_H + 0.06, 0]}>
-          <boxGeometry args={[DOOR_W + 0.24, 0.12, 0.22]} />
-          <meshStandardMaterial color="#4a3a28" roughness={0.5} envMapIntensity={0.3} />
-        </mesh>
-      </group>
-    ))}
-
-    {/* Furniture (footprints mirrored in COLLIDERS) */}
+    {/* Reception, in god-lobby white marble under a golden counter */}
     <group position={[5.5, 0, -4.5]}>
       <mesh castShadow position={[0, 0.5, 0]}>
         <boxGeometry args={[3, 1, 1]} />
-        <SurfaceMaterial maps={maps} base="desk" color="#8a6f52" roughness={0.5} />
+        <SurfaceMaterial maps={maps} base="desk" color="#ffffff" roughness={0.35} />
       </mesh>
       <mesh castShadow position={[0, 1.02, 0]}>
         <boxGeometry args={[3.2, 0.08, 1.2]} />
-        <SurfaceMaterial maps={maps} base="desk" color="#b1916a" roughness={0.4} />
+        <meshStandardMaterial color="#e8c05a" metalness={0.5} roughness={0.3} />
       </mesh>
     </group>
+    {/* Planters, gilded (footprints mirrored in COLLIDERS) */}
     {[[-8.2, -6.2], [8.2, 6.2]].map(([x, z]) => (
       <group key={`${x},${z}`} position={[x, 0, z]}>
         <mesh castShadow position={[0, 0.25, 0]}>
           <cylinderGeometry args={[0.32, 0.26, 0.5, 12]} />
-          <meshStandardMaterial color="#b0603a" roughness={0.8} />
+          <meshStandardMaterial color="#d9bd7a" metalness={0.45} roughness={0.35} />
         </mesh>
         <mesh castShadow position={[0, 0.85, 0]}>
           <sphereGeometry args={[0.45, 12, 12]} />
@@ -462,17 +380,67 @@ const RoomShell = ({ maps }) => (
         </mesh>
       </group>
     ))}
-    {/* A rug, so the floor visibly slides past while running */}
-    <mesh receiveShadow rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
-      <circleGeometry args={[2.6, 32]} />
-      <SurfaceMaterial maps={maps} base="rug" color="#9c4a58" />
-    </mesh>
+
+    {/* Where walls once stood: banks of cloud ringing the floor */}
+    <CloudField count={24} center={[0, 1.4, ROOM_HD + 3]} spread={[ROOM_HW * 2 + 10, 2.6, 4]} opacity={0.9} drift={0.25} />
+    <CloudField count={24} center={[0, 1.4, -(ROOM_HD + 3)]} spread={[ROOM_HW * 2 + 10, 2.6, 4]} opacity={0.9} drift={0.25} />
+    <CloudField count={18} center={[ROOM_HW + 3, 1.4, 0]} spread={[4, 2.6, ROOM_HD * 2 + 8]} opacity={0.9} drift={0.2} />
+    <CloudField count={18} center={[-(ROOM_HW + 3), 1.4, 0]} spread={[4, 2.6, ROOM_HD * 2 + 8]} opacity={0.9} drift={0.2} />
+    {/* low wisps sliding across the floor itself */}
+    <CloudField count={12} center={[0, 0.3, 0]} spread={[ROOM_HW * 2, 0.4, ROOM_HD * 2]} scale={[2, 5]} opacity={0.3} drift={0.3} />
   </>
 )
 
 const TexturedRoomShell = () => <RoomShell maps={useRoomMaps()} />
 
-export const Scene = ({ identity, onSignUp }) => {
+// A heaven's gate: golden pillars and lintel crowned with a finial, pure
+// light where a room's darkness used to be, and a leaf that swings open
+// on its hinge. Local space faces +z; the caller positions and rotates.
+const HeavensGate = ({ leafRef, near, accent }) => (
+  <>
+    <mesh position={[0, DOOR_H / 2 + 0.25, -0.45]}>
+      <planeGeometry args={[DOOR_W + 1.6, DOOR_H + 1.4]} />
+      <meshBasicMaterial color="#fff7dd" toneMapped={false} />
+    </mesh>
+    {[-1, 1].map((side) => (
+      <mesh key={side} castShadow position={[side * (DOOR_W / 2 + 0.2), (DOOR_H + 0.4) / 2, 0]}>
+        <boxGeometry args={[0.34, DOOR_H + 0.4, 0.34]} />
+        <meshStandardMaterial color="#e8c05a" metalness={0.5} roughness={0.32} />
+      </mesh>
+    ))}
+    <mesh castShadow position={[0, DOOR_H + 0.55, 0]}>
+      <boxGeometry args={[DOOR_W + 1.0, 0.3, 0.34]} />
+      <meshStandardMaterial color="#e8c05a" metalness={0.5} roughness={0.32} />
+    </mesh>
+    <mesh castShadow position={[0, DOOR_H + 0.9, 0]}>
+      <sphereGeometry args={[0.22, 16, 16]} />
+      <meshStandardMaterial color="#f4d98c" metalness={0.6} roughness={0.25} />
+    </mesh>
+    <group position={[-DOOR_W / 2, 0, 0.08]}>
+      <group ref={leafRef}>
+        <mesh castShadow position={[DOOR_W / 2, DOOR_H / 2, 0]}>
+          <boxGeometry args={[DOOR_W, DOOR_H, 0.09]} />
+          <meshStandardMaterial
+            color="#f6f1e4"
+            roughness={0.45}
+            emissive={near ? accent : '#000000'}
+            emissiveIntensity={0.35}
+          />
+        </mesh>
+      </group>
+    </group>
+  </>
+)
+
+export const Scene = ({ identity, onSignUp, profile }) => {
+  // The onboarding decided who runs around this lobby: their door
+  // (gender) picks the GLB, their sliders tint and scale it.
+  const playerUrl = profile
+    ? modelUrlFor(profile.gender, MODEL_VERSION, dominantEthnicity(profile))
+    : MODEL_URL
+  // The whole profile is the body record — applyBody reads the macro
+  // slider fields and ignores the rest.
+  const playerBody = profile
   const player = useRef()
   const door = useRef()
   const nameTag = useRef()
@@ -497,6 +465,11 @@ export const Scene = ({ identity, onSignUp }) => {
   const actDoor = useRef()
   const [actDoorOpen, setActDoorOpen] = useState(false)
   const [nearActDoor, setNearActDoor] = useState(false)
+  // The hair salon, off the right wall — heroes arrive bald; hair is
+  // earned in the chair. No gate, Select just opens it.
+  const salonDoor = useRef()
+  const [salonOpen, setSalonOpen] = useState(false)
+  const [nearSalon, setNearSalon] = useState(false)
 
   useEffect(attachKeyboard, [])
 
@@ -582,6 +555,9 @@ export const Scene = ({ identity, onSignUp }) => {
     const actDistance = Math.hypot(body.position.x + ROOM_HW, body.position.z)
     const nearAct = actDistance < NEAR_DISTANCE
     if (nearAct !== nearActDoor) setNearActDoor(nearAct)
+    const salonDistance = Math.hypot(body.position.x - ROOM_HW, body.position.z)
+    const nearSal = salonDistance < NEAR_DISTANCE
+    if (nearSal !== nearSalon) setNearSalon(nearSal)
 
     if (input.select && !selectWasDown.current) {
       if (near) {
@@ -591,16 +567,22 @@ export const Scene = ({ identity, onSignUp }) => {
         else onSignUp()
       } else if (nearAct) {
         setActDoorOpen((open) => !open)
+      } else if (nearSal) {
+        setSalonOpen((open) => !open)
       }
     }
     selectWasDown.current = input.select
 
-    // Slide, don't snap: the doors ease sideways into their walls.
-    door.current.position.x = THREE.MathUtils.damp(
-      door.current.position.x, doorOpen ? DOOR_W + 0.15 : 0, 8, dt)
+    // Swing, don't snap: heaven's gates ease open on their hinges.
+    door.current.rotation.y = THREE.MathUtils.damp(
+      door.current.rotation.y, doorOpen ? -1.9 : 0, 6, dt)
     if (actDoor.current) {
-      actDoor.current.position.z = THREE.MathUtils.damp(
-        actDoor.current.position.z, actDoorOpen ? DOOR_W + 0.15 : 0, 8, dt)
+      actDoor.current.rotation.y = THREE.MathUtils.damp(
+        actDoor.current.rotation.y, actDoorOpen ? -1.9 : 0, 6, dt)
+    }
+    if (salonDoor.current) {
+      salonDoor.current.rotation.y = THREE.MathUtils.damp(
+        salonDoor.current.rotation.y, salonOpen ? -1.9 : 0, 6, dt)
     }
 
     // --- Third-person camera -------------------------------------------
@@ -650,10 +632,9 @@ export const Scene = ({ identity, onSignUp }) => {
 
   return (
     <>
-      <color attach="background" args={['#15181e']} />
-      {/* Image-based lighting, so the character's skin and cloth pick up
-          believable bounce light instead of flat lamp shading. */}
-      <RoomLighting />
+      <color attach="background" args={[SKY.top]} />
+      {/* The real sky over the god-lobby: HDR background + lighting */}
+      <HeavenSky />
       <ambientLight intensity={0.22} />
       {/* The key: a warm ceiling spot, the only shadow-caster one room can
           afford. A spot rather than a bare point so light falls off toward
@@ -693,45 +674,14 @@ export const Scene = ({ identity, onSignUp }) => {
         </Suspense>
       </AssetBoundary>
 
-      {/* --- The activity room door -------------------------------------- */}
-      {/* The dark of the activity room, glimpsed through the gap when open */}
-      <mesh rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW - 0.5, DOOR_H / 2, 0]}>
-        <planeGeometry args={[DOOR_W + 1.2, DOOR_H + 0.6]} />
-        <meshStandardMaterial color="#07080c" />
-      </mesh>
-      <Text
-        rotation={[0, Math.PI / 2, 0]}
-        position={[-ROOM_HW - 0.45, 1.5, 0]}
-        fontSize={0.24}
-        color="#5f8f6f"
-        anchorX="center"
-        anchorY="middle"
-      >
-        ACTIVITY ROOM
-      </Text>
-      {/* The door itself, just outside the wall so it can slide in behind it */}
-      <mesh ref={actDoor} castShadow rotation={[0, Math.PI / 2, 0]} position={[-ROOM_HW - 0.12, DOOR_H / 2, 0]}>
-        <boxGeometry args={[DOOR_W, DOOR_H, 0.1]} />
-        <meshStandardMaterial
-          color="#2f9d5c"
-          emissive={nearActDoor ? '#2f9d5c' : '#000000'}
-          emissiveIntensity={0.3}
-        />
-      </mesh>
-      {/* The door's plate on the lobby side of the wall */}
-      <Text
-        rotation={[0, Math.PI / 2, 0]}
-        position={[-ROOM_HW + 0.06, 2.78, 0]}
-        fontSize={0.17}
-        color="#d6ffe8"
-        outlineWidth={0.008}
-        outlineColor="#1a2e1a"
-        anchorX="center"
-        anchorY="middle"
-      >
-        ACTIVITY ROOM
-      </Text>
-      {/* The prompt, floating by the door once you are within reach */}
+      {/* --- The activity room gate --------------------------------------- */}
+      <group position={[-ROOM_HW, 0, 0]} rotation={[0, Math.PI / 2, 0]}>
+        <HeavensGate leafRef={actDoor} near={nearActDoor} accent="#2f9d5c" />
+        <Text position={[0, DOOR_H + 0.55, 0.21]} fontSize={0.2} color="#d6ffe8" outlineWidth={0.008} outlineColor="#1a2e1a" anchorX="center" anchorY="middle">
+          ACTIVITY ROOM
+        </Text>
+      </group>
+      {/* The prompt, floating by the gate once you are within reach */}
       {nearActDoor && (
         <Billboard position={[-ROOM_HW + 0.6, DOOR_H + 0.5, 0]}>
           <Text
@@ -747,34 +697,40 @@ export const Scene = ({ identity, onSignUp }) => {
         </Billboard>
       )}
 
-      {/* --- The dressing room door -------------------------------------- */}
-      {/* The dark of the dressing room, glimpsed through the gap when open */}
-      <mesh position={[0, DOOR_H / 2, -ROOM_HD - 0.5]}>
-        <planeGeometry args={[DOOR_W + 1.2, DOOR_H + 0.6]} />
-        <meshStandardMaterial color="#07080c" />
-      </mesh>
-      <Text
-        position={[0, 1.5, -ROOM_HD - 0.45]}
-        fontSize={0.24}
-        color="#5f6f8f"
-        anchorX="center"
-        anchorY="middle"
-      >
-        {identity ? `${identity.displayName}'s dressing room` : 'DRESSING ROOM'}
-      </Text>
-      {/* The door itself, just behind the wall so it can slide in behind it */}
-      <mesh ref={door} castShadow position={[0, DOOR_H / 2, -ROOM_HD - 0.12]}>
-        <boxGeometry args={[DOOR_W, DOOR_H, 0.1]} />
-        <meshStandardMaterial
-          color="#2f6fd8"
-          emissive={nearDoor ? '#2f6fd8' : '#000000'}
-          emissiveIntensity={0.3}
-        />
-      </mesh>
+      {/* --- The hair salon gate ------------------------------------------ */}
+      <group position={[ROOM_HW, 0, 0]} rotation={[0, -Math.PI / 2, 0]}>
+        <HeavensGate leafRef={salonDoor} near={nearSalon} accent="#d0568e" />
+        <Text position={[0, DOOR_H + 0.55, 0.21]} fontSize={0.2} color="#ffe0ef" outlineWidth={0.008} outlineColor="#3a1a2c" anchorX="center" anchorY="middle">
+          HAIR SALON
+        </Text>
+      </group>
+      {/* The prompt, floating by the gate once you are within reach */}
+      {nearSalon && (
+        <Billboard position={[ROOM_HW - 0.6, DOOR_H + 0.5, 0]}>
+          <Text
+            fontSize={0.24}
+            color="#ffe0ef"
+            outlineWidth={0.012}
+            outlineColor="#3a1a2c"
+            anchorX="center"
+            anchorY="middle"
+          >
+            {salonOpen ? 'SELECT to close' : 'SELECT to open'}
+          </Text>
+        </Billboard>
+      )}
 
-      {/* The lobby's sign, high on the wall, and the door's own plate */}
+      {/* --- The dressing room gate --------------------------------------- */}
+      <group position={[0, 0, -ROOM_HD]}>
+        <HeavensGate leafRef={door} near={nearDoor} accent="#2f6fd8" />
+        <Text position={[0, DOOR_H + 0.55, 0.21]} fontSize={0.18} color="#fff7d6" outlineWidth={0.008} outlineColor="#1a1a2e" anchorX="center" anchorY="middle">
+          {identity ? `${identity.displayName}'s dressing room` : 'DRESSING ROOM'}
+        </Text>
+      </group>
+
+      {/* The lobby's sign, floating in the sky above the gate */}
       <Text
-        position={[0, 3.6, -ROOM_HD + 0.06]}
+        position={[0, 4.5, -ROOM_HD + 0.06]}
         fontSize={0.45}
         color="white"
         outlineWidth={0.02}
@@ -785,24 +741,13 @@ export const Scene = ({ identity, onSignUp }) => {
         B1NGSTER
       </Text>
       <Text
-        position={[0, 3.2, -ROOM_HD + 0.06]}
+        position={[0, 4.05, -ROOM_HD + 0.06]}
         fontSize={0.2}
         color="#e8b83a"
         anchorX="center"
         anchorY="middle"
       >
         — THE LOBBY —
-      </Text>
-      <Text
-        position={[0, 2.78, -ROOM_HD + 0.06]}
-        fontSize={0.17}
-        color="#fff7d6"
-        outlineWidth={0.008}
-        outlineColor="#1a1a2e"
-        anchorX="center"
-        anchorY="middle"
-      >
-        DRESSING ROOM
       </Text>
 
       {/* The prompt, floating by the door once you are within reach */}
@@ -847,7 +792,7 @@ export const Scene = ({ identity, onSignUp }) => {
           own room exactly at its back. */}
       <group ref={player} position={[0, 0, -4]}>
         <CharacterBoundary>
-          <CharacterWithIntro url={MODEL_URL} motion={paceRef} />
+          <CharacterWithIntro url={playerUrl} motion={paceRef} body={playerBody} />
         </CharacterBoundary>
       </group>
 
@@ -863,57 +808,3 @@ export const Scene = ({ identity, onSignUp }) => {
   )
 }
 
-// The stand-in shown while the GLB streams: a small figure in the enby
-// flag's stripes, eyes marking which way it faces.
-const PlaceholderFigure = () => (
-  <>
-    {/* Legs: the flag's black stripe */}
-    <mesh castShadow position={[-0.12, 0.25, 0]}>
-      <cylinderGeometry args={[0.09, 0.09, 0.5, 10]} />
-      <meshStandardMaterial color="#2c2c2c" />
-    </mesh>
-    <mesh castShadow position={[0.12, 0.25, 0]}>
-      <cylinderGeometry args={[0.09, 0.09, 0.5, 10]} />
-      <meshStandardMaterial color="#2c2c2c" />
-    </mesh>
-    {/* Torso: purple, white, yellow stripes reading upward */}
-    <mesh castShadow position={[0, 0.6, 0]}>
-      <cylinderGeometry args={[0.27, 0.29, 0.22, 16]} />
-      <meshStandardMaterial color="#9c59d1" />
-    </mesh>
-    <mesh castShadow position={[0, 0.81, 0]}>
-      <cylinderGeometry args={[0.26, 0.27, 0.22, 16]} />
-      <meshStandardMaterial color="#ffffff" />
-    </mesh>
-    <mesh castShadow position={[0, 1.02, 0]}>
-      <cylinderGeometry args={[0.24, 0.26, 0.22, 16]} />
-      <meshStandardMaterial color="#fcf434" />
-    </mesh>
-    {/* Arms, resting at the sides */}
-    <mesh castShadow position={[-0.32, 0.82, 0]}>
-      <capsuleGeometry args={[0.06, 0.34, 6, 10]} />
-      <meshStandardMaterial color="#ffffff" />
-    </mesh>
-    <mesh castShadow position={[0.32, 0.82, 0]}>
-      <capsuleGeometry args={[0.06, 0.34, 6, 10]} />
-      <meshStandardMaterial color="#ffffff" />
-    </mesh>
-    {/* Head, with a short cropped haircut */}
-    <mesh castShadow position={[0, 1.3, 0]}>
-      <sphereGeometry args={[0.19, 16, 16]} />
-      <meshStandardMaterial color="#e8b98a" />
-    </mesh>
-    <mesh castShadow position={[0, 1.36, -0.03]}>
-      <sphereGeometry args={[0.2, 16, 16, 0, Math.PI * 2, 0, Math.PI * 0.55]} />
-      <meshStandardMaterial color="#4a3626" />
-    </mesh>
-    <mesh position={[-0.07, 1.32, 0.16]}>
-      <sphereGeometry args={[0.035, 10, 10]} />
-      <meshStandardMaterial color="#1a1a2e" />
-    </mesh>
-    <mesh position={[0.07, 1.32, 0.16]}>
-      <sphereGeometry args={[0.035, 10, 10]} />
-      <meshStandardMaterial color="#1a1a2e" />
-    </mesh>
-  </>
-)
