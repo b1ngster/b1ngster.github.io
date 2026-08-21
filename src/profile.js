@@ -38,7 +38,7 @@ export const BODY_DEFAULTS = {
 // painted light — european near as-authored, asian warmed golden,
 // african deepened to brown. Blended by the three ethnicity weights.
 const TINTS = {
-  african: [0.45, 0.32, 0.22],
+  african: [0.32, 0.22, 0.15],
   asian: [0.98, 0.87, 0.68],
   indian: [0.7, 0.5, 0.32],
   european: [1.0, 0.98, 0.96],
@@ -68,11 +68,15 @@ export const dominantEthnicity = (body) => {
 // tint is applied RELATIVE to this, so a pure-african blend on the african
 // model gets no tint at all, and mixes shade from the authentic base.
 // (indian reuses the asian skin texture; its brown comes from the tint.)
+// Decoupled from TINTS: these describe what the TEXTURES inherently
+// carry, so the targets above can sit darker than the texture and the
+// ratio actually deepens the skin (a 1:1 ratio was leaving Black skin
+// too light under the bright sky).
 const VARIANT_TONE = {
-  african: TINTS.african,
-  asian: TINTS.asian,
-  indian: TINTS.asian,
-  european: TINTS.european,
+  african: [0.45, 0.32, 0.22],
+  asian: [0.98, 0.87, 0.68],
+  indian: [0.98, 0.87, 0.68],
+  european: [1.0, 0.98, 0.96],
 }
 
 export const tintFor = (body) => {
@@ -259,7 +263,9 @@ export const applyBody = (root, body) => {
       // authentic texture detail from the swap, shade from the tint.
       if (o.material.userData.youngMap === undefined) o.material.userData.youngMap = o.material.map
       const unified = !!(o.morphTargetDictionary && 'macro_african' in o.morphTargetDictionary)
-      const young = unified && dominant !== 'european'
+      // Unified models ALWAYS swap to the cleaned runtime textures — the
+      // GLB-embedded skin still has MakeHuman's painted-on hair.
+      const young = unified
         ? loadOldTex(youngTextureUrl(dominant, b.gender))
         : o.material.userData.youngMap
       const wanted = b.age > OLD_AGE
@@ -269,9 +275,11 @@ export const applyBody = (root, body) => {
         o.material.map = wanted
         o.material.needsUpdate = true
       }
-      // and skin weathers: rougher past the middle years
-      if (o.material.userData.baseRoughness === undefined) o.material.userData.baseRoughness = o.material.roughness
-      o.material.roughness = Math.min(1, o.material.userData.baseRoughness + Math.max(0, b.age - 0.5) * 0.35)
+      // Matte skin: the baked roughness map modulates BELOW this
+      // multiplier, and the environment reflection is cut hard — real
+      // skin is not glossy. Age still weathers it further.
+      o.material.roughness = Math.min(1, 0.96 + Math.max(0, b.age - 0.5) * 0.1)
+      o.material.envMapIntensity = 0.45
       // Modern skin: pore-level normal + roughness variation baked from
       // MPFB's enhanced skin — micro-detail at glancing light.
       if (!o.material.userData.skinDetail) {
