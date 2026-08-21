@@ -1,27 +1,32 @@
 /**
- * The gates of the lobby: a sky full of drifting CSS clouds and one card
- * asking for an email. Sits over everything while the heavy 3D assets
- * stream in the background, so the wait IS the welcome.
+ * The gates of the lobby: the same photographic sky the ascension rose
+ * through — continuity, not a cartoon backdrop — and one card asking for
+ * an email, docking in from deep sky.
  */
 import { useState } from 'react'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
+import { HeavenSky } from './heaven'
 import './heaven.css'
 
-// A fixed cast of clouds — deterministic sizes/lanes so the sky doesn't
-// reshuffle on re-render.
-const CLOUDS = [
-  { top: '12%', size: 26, duration: 95, delay: -20 },
-  { top: '25%', size: 38, duration: 130, delay: -75 },
-  { top: '44%', size: 30, duration: 110, delay: -40 },
-  { top: '60%', size: 44, duration: 150, delay: -110 },
-  { top: '74%', size: 32, duration: 120, delay: -15 },
-  { top: '85%', size: 50, duration: 170, delay: -90 },
-]
+// The sky keeps breathing: a slow pan across the photographic clouds.
+const SkyDrift = () => {
+  const { camera } = useThree()
+  useFrame(({ clock }) => {
+    const t = clock.elapsedTime * 0.02
+    camera.lookAt(Math.sin(t) * 10, 3 + Math.cos(t * 0.7) * 2, -12)
+  })
+  return null
+}
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
 
 export const Entry = ({ onEnter }) => {
   const [email, setEmail] = useState('')
   const [touched, setTouched] = useState(false)
+  // The card arrives like a craft reversing in to dock: flown in from
+  // deep sky with a bank and a decelerating settle — then the hull doors
+  // slide open to reveal the form.
+  const [docked, setDocked] = useState(false)
   const valid = EMAIL_RE.test(email.trim())
 
   const submit = (e) => {
@@ -32,20 +37,21 @@ export const Entry = ({ onEnter }) => {
 
   return (
     <div className="heaven">
-      {CLOUDS.map((c, i) => (
-        <div
-          key={i}
-          className="heaven-cloud"
-          style={{
-            top: c.top,
-            width: `${c.size}vmin`,
-            height: `${c.size * 0.38}vmin`,
-            animationDuration: `${c.duration}s`,
-            animationDelay: `${c.delay}s`,
-          }}
-        />
-      ))}
-      <form className="heaven-card" onSubmit={submit}>
+      <div className="heaven-sky-canvas" aria-hidden="true">
+        <Canvas camera={{ position: [0, 1.5, 0], fov: 68 }}>
+          <HeavenSky file="heaven_clouds_1k.hdr" />
+          <SkyDrift />
+        </Canvas>
+      </div>
+      <form
+        className={`heaven-card heaven-card-arrive${docked ? ' docked' : ''}`}
+        onAnimationEnd={() => setDocked(true)}
+        onSubmit={submit}
+      >
+        <div className={`card-doors${docked ? ' open' : ''}`} aria-hidden="true">
+          <div className="card-door left" />
+          <div className="card-door right" />
+        </div>
         <h1>B1NGSTER</h1>
         <p>The cloud portal for heroes bound for Earth. Leave your email at the gate.</p>
         <input

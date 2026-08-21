@@ -5,11 +5,23 @@
   position: absolute;
   inset: 0;
   overflow: hidden;
-  background: linear-gradient(#7fbdf2 0%, #a8d4f7 45%, #eaf5ff 100%);
+  perspective: 900px;
+  background: #a8c4dd; /* only until the photographic sky streams in */
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 20;
+}
+
+.heaven-sky-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.heaven-card-arrive,
+.heaven-card {
+  z-index: 1;
 }
 
 .heaven-cloud {
@@ -23,6 +35,72 @@
 @keyframes heaven-drift {
   from { transform: translateX(-18vw); }
   to { transform: translateX(118vw); }
+}
+
+/* The arrival: flown in from deep in the sky, banking like a craft
+   reversing to dock, easing hard into stillness. */
+@keyframes heaven-card-arrive {
+  0% {
+    transform: translateZ(-2400px) translateY(-34vh);
+    opacity: 0;
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateZ(0) translateY(0);
+    opacity: 1;
+  }
+}
+
+.heaven-card-arrive {
+  animation: heaven-card-arrive 1.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heaven-card-arrive {
+    animation: none;
+  }
+  .card-doors {
+    display: none;
+  }
+}
+
+/* The hull doors: two panels over the form that slide apart once the
+   card has docked. */
+.card-doors {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.card-door {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 51%;
+  background: linear-gradient(#fdfefe, #e9eef5);
+  transition: transform 0.7s cubic-bezier(0.4, 0, 0.2, 1) 0.1s;
+}
+
+.card-door.left {
+  left: 0;
+  border-right: 1px solid #cfdae8;
+}
+
+.card-door.right {
+  right: 0;
+  border-left: 1px solid #cfdae8;
+}
+
+.card-doors.open .card-door.left {
+  transform: translateX(-102%);
+}
+
+.card-doors.open .card-door.right {
+  transform: translateX(102%);
 }
 
 .heaven-card {
