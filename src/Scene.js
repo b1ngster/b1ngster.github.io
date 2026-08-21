@@ -4,7 +4,7 @@ import { Billboard, ContactShadows, Text, useAnimations, useGLTF, useTexture } f
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { SkeletonUtils } from 'three-stdlib'
-import { CloudField, SKY, HeavenSky } from './heaven'
+import { SKY, HeavenSky } from './heaven'
 import { input, attachKeyboard } from './input'
 import midnightSun from './timing/midnightSun.json'
 import { createSinger } from './faceScore'
@@ -387,13 +387,6 @@ const RoomShell = ({ maps }) => (
       </group>
     ))}
 
-    {/* Where walls once stood: banks of cloud ringing the floor */}
-    <CloudField count={24} center={[0, 1.4, ROOM_HD + 3]} spread={[ROOM_HW * 2 + 10, 2.6, 4]} opacity={0.9} drift={0.25} />
-    <CloudField count={24} center={[0, 1.4, -(ROOM_HD + 3)]} spread={[ROOM_HW * 2 + 10, 2.6, 4]} opacity={0.9} drift={0.25} />
-    <CloudField count={18} center={[ROOM_HW + 3, 1.4, 0]} spread={[4, 2.6, ROOM_HD * 2 + 8]} opacity={0.9} drift={0.2} />
-    <CloudField count={18} center={[-(ROOM_HW + 3), 1.4, 0]} spread={[4, 2.6, ROOM_HD * 2 + 8]} opacity={0.9} drift={0.2} />
-    {/* low wisps sliding across the floor itself */}
-    <CloudField count={12} center={[0, 0.3, 0]} spread={[ROOM_HW * 2, 0.4, ROOM_HD * 2]} scale={[2, 5]} opacity={0.3} drift={0.3} />
   </>
 )
 
@@ -441,8 +434,11 @@ const HeavensGate = ({ leafRef, near, accent }) => (
 export const Scene = ({ identity, onSignUp, profile }) => {
   // The onboarding decided who runs around this lobby: their door
   // (gender) picks the GLB, their sliders tint and scale it.
+  // The same bare anatomical body the mirror shaped — the persona must
+  // not change on the way to the lobby. Real geometry clothing will
+  // dress it later.
   const playerUrl = profile
-    ? modelUrlFor(profile.gender, MODEL_VERSION, dominantEthnicity(profile))
+    ? modelUrlFor(profile.gender, MODEL_VERSION, dominantEthnicity(profile), true)
     : MODEL_URL
   // The whole profile is the body record — applyBody reads the macro
   // slider fields and ignores the rest.
