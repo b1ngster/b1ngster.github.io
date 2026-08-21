@@ -8,7 +8,7 @@ import { SKY, HeavenSky } from './heaven'
 import { input, attachKeyboard } from './input'
 import midnightSun from './timing/midnightSun.json'
 import { createSinger } from './faceScore'
-import { modelUrlFor, applyBody, dominantEthnicity, stoopAngle } from './profile'
+import { modelUrlFor, applyBody, dominantEthnicity, stoopAngle, MICRO_LENGTH_BONES, isDressed } from './profile'
 
 // Timing lifted straight from the "Midnight Sun" Renoise project: chord
 // changes (accents) and bass note onsets (downbeats), in seconds. No audio
@@ -52,7 +52,7 @@ const pulseEnvelope = (times, t, tau, window) => {
 // The GLB filenames are stable across deploys, so a version tag busts
 // browser caches whenever a model is re-exported — bump it on every model
 // change or clients keep their cached copy for however long they please.
-export const MODEL_VERSION = 20
+export const MODEL_VERSION = 21
 const MODEL_URL = `${process.env.PUBLIC_URL}/models/male.glb?v=${MODEL_VERSION}`
 // The receptionist keeps her own copy of the viseme-carrying female —
 // the player models are being replaced by morph-target rebuilds.
@@ -116,15 +116,20 @@ const Character = ({ url, motion, sing, body, onReady }) => {
   // intro crossfade know the real character is on stage.
   useEffect(() => { onReady?.() }, [onReady])
   // The clips key every bone's scale with static 1s, which would overwrite
-  // applyBody's skeleton shaping every frame — strip all scale tracks. A
-  // singer's jaw and head-lean bones likewise belong to singFrame alone:
-  // strip their rest-pose tracks too. (On clones — useGLTF caches the
-  // originals.)
+  // applyBody's skeleton shaping every frame — strip all scale tracks.
+  // They key every bone's TRANSLATION with its static rest offset too,
+  // which would undo the micro sliders' limb lengths; strip those for the
+  // limb joints alone, never for root or pelvis, since those are the only
+  // bones a clip could legitimately translate. A singer's jaw and
+  // head-lean bones likewise belong to singFrame alone: strip their
+  // rest-pose tracks too. (On clones — useGLTF caches the originals.)
   const clips = useMemo(() =>
     animations.map((clip) => {
       const c = clip.clone()
       c.tracks = c.tracks.filter((t) =>
         !t.name.endsWith('.scale') &&
+        !(t.name.endsWith('.position') &&
+          MICRO_LENGTH_BONES.has(t.name.slice(0, -'.position'.length))) &&
         (!sing || (!t.name.startsWith('jaw.') && !t.name.startsWith('neck03.'))))
       return c
     }), [animations, sing])
@@ -392,53 +397,200 @@ const RoomShell = ({ maps }) => (
 
 const TexturedRoomShell = () => <RoomShell maps={useRoomMaps()} />
 
-// A heaven's gate: golden pillars and lintel crowned with a finial, pure
-// light where a room's darkness used to be, and a leaf that swings open
-// on its hinge. Local space faces +z; the caller positions and rotates.
-const HeavensGate = ({ leafRef, near, accent }) => (
-  <>
-    <mesh position={[0, DOOR_H / 2 + 0.25, -0.45]}>
-      <planeGeometry args={[DOOR_W + 1.6, DOOR_H + 1.4]} />
-      <meshBasicMaterial color="#fff7dd" toneMapped={false} />
-    </mesh>
-    {[-1, 1].map((side) => (
-      <mesh key={side} castShadow position={[side * (DOOR_W / 2 + 0.2), (DOOR_H + 0.4) / 2, 0]}>
-        <boxGeometry args={[0.34, DOOR_H + 0.4, 0.34]} />
-        <meshStandardMaterial color="#e8c05a" metalness={0.5} roughness={0.32} />
-      </mesh>
-    ))}
-    <mesh castShadow position={[0, DOOR_H + 0.55, 0]}>
-      <boxGeometry args={[DOOR_W + 1.0, 0.3, 0.34]} />
-      <meshStandardMaterial color="#e8c05a" metalness={0.5} roughness={0.32} />
-    </mesh>
-    <mesh castShadow position={[0, DOOR_H + 0.9, 0]}>
-      <sphereGeometry args={[0.22, 16, 16]} />
-      <meshStandardMaterial color="#f4d98c" metalness={0.6} roughness={0.25} />
-    </mesh>
-    <group position={[-DOOR_W / 2, 0, 0.08]}>
-      <group ref={leafRef}>
-        <mesh castShadow position={[DOOR_W / 2, DOOR_H / 2, 0]}>
-          <boxGeometry args={[DOOR_W, DOOR_H, 0.09]} />
-          <meshStandardMaterial
-            color="#f6f1e4"
-            roughness={0.45}
-            emissive={near ? accent : '#000000'}
-            emissiveIntensity={0.35}
-          />
-        </mesh>
-      </group>
-    </group>
-  </>
+// --- Heaven's gate -------------------------------------------------------
+// The lobby has no walls, so these gates stand free on the cloud floor and
+// are read in the round: collared columns on plinths, a nameplate lintel
+// under a fanlight arch, and a pair of spear-tipped leaves that swing
+// apart. Local space faces +z; the caller positions and rotates.
+//
+// Three gates share one buffer per shape rather than allocating a geometry
+// per bar, so the ironwork costs draw calls but almost no memory. Unit
+// primitives are scaled at each use.
+const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1)
+const UNIT_BAR = new THREE.CylinderGeometry(1, 1, 1, 10)
+const UNIT_CONE = new THREE.ConeGeometry(1, 1, 10)
+const UNIT_BALL = new THREE.SphereGeometry(1, 14, 12)
+const RING_MEDALLION = new THREE.TorusGeometry(0.3, 0.032, 8, 28)
+const RING_COLLAR = new THREE.TorusGeometry(0.17, 0.028, 8, 20)
+const ARCH_RING = new THREE.TorusGeometry(1, 0.05, 8, 44, Math.PI)
+
+// Polished gold. Fully metallic — a metal has no diffuse colour of its
+// own, so the HDR sky supplies the reflection and the room's warm spot
+// supplies the highlights. envMapIntensity above 1 leans into the sky,
+// which is what keeps it reading as gold rather than yellow plastic.
+const GOLD = new THREE.MeshStandardMaterial({
+  color: '#e3b243',
+  metalness: 1,
+  roughness: 0.24,
+  envMapIntensity: 1.25,
+})
+// The brighter, smoother gold of the ornament: finials, spear tips, rings.
+const GOLD_BRIGHT = new THREE.MeshStandardMaterial({
+  color: '#f7dc95',
+  metalness: 1,
+  roughness: 0.14,
+  envMapIntensity: 1.5,
+})
+
+const LEAF_W = DOOR_W / 2
+const POST_X = DOOR_W / 2 + 0.26
+const LINTEL_Y = DOOR_H + 0.55 // the nameplate course the caller's label sits on
+const ARCH_Y = LINTEL_Y + 0.23 // where the fanlight springs, just above the cornice
+const ARCH_RISE = 0.46
+
+const Beam = ({ size, bright, ...props }) => (
+  <mesh geometry={UNIT_BOX} material={bright ? GOLD_BRIGHT : GOLD} scale={size} {...props} />
 )
+const Bar = ({ r, h, bright, ...props }) => (
+  <mesh geometry={UNIT_BAR} material={bright ? GOLD_BRIGHT : GOLD} scale={[r, h, r]} {...props} />
+)
+
+// One leaf of the pair. `dir` is the way it reaches from its hinge — +1 for
+// the left leaf, -1 for the right — so both are built from the same numbers
+// and meet in the middle.
+const BALUSTERS = [0.22, 0.4, 0.58, 0.76]
+const GateLeaf = ({ dir, accent, near }) => {
+  const u = (t) => dir * t // along-leaf 0..LEAF_W → local x
+
+  return (
+    <group>
+      {/* stiles: the hinge edge and the edge that meets its twin */}
+      {[0.045, 0.955].map((t) => (
+        <Beam key={t} castShadow size={[0.075, DOOR_H - 0.02, 0.08]} position={[u(t), DOOR_H / 2, 0]} />
+      ))}
+      {/* rails: foot, waist and head of the frame */}
+      <Beam castShadow size={[LEAF_W, 0.13, 0.08]} position={[u(0.5), 0.14, 0]} />
+      <Beam castShadow size={[LEAF_W, 0.1, 0.08]} position={[u(0.5), 1.04, 0]} />
+      <Beam castShadow size={[LEAF_W, 0.13, 0.08]} position={[u(0.5), 2.42, 0]} />
+      {/* Spear-tipped balusters, standing a little proud of the rails so
+          the ironwork layers instead of z-fighting. No castShadow: at the
+          spot's 2048 map a 5cm bar is under a texel and only aliases. */}
+      {BALUSTERS.map((t) => (
+        <group key={t} position={[u(t), 0, 0.028]}>
+          <Bar r={0.026} h={2.25} position={[0, 1.325, 0]} />
+          <mesh
+            geometry={UNIT_CONE}
+            material={GOLD_BRIGHT}
+            scale={[0.052, 0.2, 0.052]}
+            position={[0, 2.58, 0]}
+          />
+        </group>
+      ))}
+      {/* The ring medallion in the lower panel — the one piece that answers
+          to the player, catching the room's accent as they come within reach. */}
+      <mesh geometry={RING_MEDALLION} position={[u(0.5), 0.58, 0.05]}>
+        <meshStandardMaterial
+          color="#f7dc95"
+          metalness={1}
+          roughness={0.14}
+          envMapIntensity={1.5}
+          emissive={near ? accent : '#000000'}
+          emissiveIntensity={near ? 0.9 : 0}
+        />
+      </mesh>
+    </group>
+  )
+}
+
+const HeavensGate = ({ leafRef, near, accent }) => {
+  const rightLeaf = useRef()
+  // Scene damps the left leaf's rotation.y. The right leaf is its mirror,
+  // so the pair opens together without a second ref crossing the API.
+  useFrame(() => {
+    if (rightLeaf.current && leafRef.current) {
+      rightLeaf.current.rotation.y = -leafRef.current.rotation.y
+    }
+  })
+
+  return (
+    <>
+      {/* The light beyond, sized to the portal itself. The old slab was
+          wider than the gate, which only worked while a wall hid its
+          edges — with the lobby open to the sky it has to sit *inside*
+          the columns, so it reads as radiance in the doorway. */}
+      <mesh position={[0, (DOOR_H + 0.3) / 2, -0.45]}>
+        <planeGeometry args={[DOOR_W + 0.12, DOOR_H + 0.3]} />
+        <meshBasicMaterial color="#fff7dd" toneMapped={false} />
+      </mesh>
+
+      {/* The columns: plinth, collared shaft, capital */}
+      {[-1, 1].map((side) => (
+        <group key={side} position={[side * POST_X, 0, 0]}>
+          <Beam castShadow size={[0.54, 0.16, 0.54]} position={[0, 0.08, 0]} />
+          <Beam castShadow size={[0.44, 0.07, 0.44]} position={[0, 0.195, 0]} />
+          <Bar castShadow r={0.15} h={2.62} position={[0, 1.54, 0]} />
+          <mesh geometry={RING_COLLAR} material={GOLD_BRIGHT} rotation={[Math.PI / 2, 0, 0]} position={[0, 0.32, 0]} />
+          <mesh geometry={RING_COLLAR} material={GOLD_BRIGHT} rotation={[Math.PI / 2, 0, 0]} position={[0, 2.76, 0]} />
+          <Beam castShadow size={[0.42, 0.16, 0.42]} position={[0, 2.93, 0]} />
+        </group>
+      ))}
+
+      {/* The nameplate lintel and its cornice. Neither reaches past
+          z=0.17, so the caller's label — which floats at z=0.21 — still
+          reads clear of them. */}
+      <Beam castShadow size={[DOOR_W + 1.15, 0.28, 0.3]} position={[0, LINTEL_Y, 0]} />
+      <Beam castShadow size={[DOOR_W + 1.45, 0.09, 0.34]} position={[0, LINTEL_Y + 0.185, 0]} />
+
+      {/* The fanlight: a flattened arch whose spokes radiate from the
+          keystone. Scaling the group squashes the spokes with it, so they
+          follow the ellipse the way real fanlight bars do. */}
+      <group position={[0, ARCH_Y, 0]} scale={[DOOR_W / 2 + 0.34, ARCH_RISE, 1]}>
+        <mesh geometry={ARCH_RING} material={GOLD} />
+        {[0.2, 0.4, 0.6, 0.8].map((f) => {
+          const a = Math.PI * f
+          return (
+            <mesh
+              key={f}
+              geometry={UNIT_BAR}
+              material={GOLD}
+              scale={[0.03, 1, 0.03]}
+              position={[Math.cos(a) * 0.5, Math.sin(a) * 0.5, 0]}
+              rotation={[0, 0, a - Math.PI / 2]}
+            />
+          )
+        })}
+      </group>
+
+      {/* Crown: a ball and spire over the keystone, and a smaller pair
+          standing on the cornice ends to frame the arch. */}
+      <mesh geometry={UNIT_BALL} material={GOLD_BRIGHT} scale={0.12} position={[0, ARCH_Y + ARCH_RISE + 0.06, 0]} />
+      <mesh
+        geometry={UNIT_CONE}
+        material={GOLD_BRIGHT}
+        scale={[0.08, 0.26, 0.08]}
+        position={[0, ARCH_Y + ARCH_RISE + 0.26, 0]}
+      />
+      {[-1, 1].map((side) => (
+        <group key={side} position={[side * (DOOR_W / 2 + 0.5), 0, 0]}>
+          <mesh geometry={UNIT_BALL} material={GOLD_BRIGHT} scale={0.12} position={[0, 3.5, 0]} />
+          <mesh geometry={UNIT_CONE} material={GOLD_BRIGHT} scale={[0.075, 0.3, 0.075]} position={[0, 3.78, 0]} />
+        </group>
+      ))}
+
+      {/* The pair of leaves, hinged on the inner face of each column */}
+      <group position={[-DOOR_W / 2, 0, 0.1]}>
+        <group ref={leafRef}>
+          <GateLeaf dir={1} accent={accent} near={near} />
+        </group>
+      </group>
+      <group position={[DOOR_W / 2, 0, 0.1]}>
+        <group ref={rightLeaf}>
+          <GateLeaf dir={-1} accent={accent} near={near} />
+        </group>
+      </group>
+    </>
+  )
+}
 
 export const Scene = ({ identity, onSignUp, profile }) => {
   // The onboarding decided who runs around this lobby: their door
   // (gender) picks the GLB, their sliders tint and scale it.
-  // The same bare anatomical body the mirror shaped — the persona must
-  // not change on the way to the lobby. Real geometry clothing will
-  // dress it later.
+  // The same body the mirror shaped — the persona must not change on the
+  // way to the lobby, clothes included. Dressed loads the clothed export
+  // (real garment geometry); stripped bare loads the bare one, which
+  // carries the extra body-detail morphs the clothed export lacks.
   const playerUrl = profile
-    ? modelUrlFor(profile.gender, MODEL_VERSION, dominantEthnicity(profile), true)
+    ? modelUrlFor(profile.gender, MODEL_VERSION, dominantEthnicity(profile), !isDressed(profile))
     : MODEL_URL
   // The whole profile is the body record — applyBody reads the macro
   // slider fields and ignores the rest.

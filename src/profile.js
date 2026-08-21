@@ -14,7 +14,7 @@
  * spine. Baking real macro morphs via the MPFB pipeline is the future
  * upgrade path.
  */
-import { Box3, CanvasTexture, TextureLoader, Vector2, sRGBEncoding } from 'three'
+import { Box3, CanvasTexture, TextureLoader, Vector2, Vector3, sRGBEncoding } from 'three'
 
 const KEY = 'b1ngster.profile.v2'
 
@@ -34,6 +34,42 @@ export const BODY_DEFAULTS = {
   proportions: 0.5,
   breastSize: 0.5,
   breastFirmness: 0.5,
+  // --- Skeleton: the frame everything else hangs on --------------------
+  // Separated from muscle and fat on purpose: a broad-shouldered, narrow
+  // -hipped body and a narrow-shouldered, broad-hipped one are different
+  // SKELETONS, not different weights, and collapsing them into one
+  // "build" slider is what makes character creators produce one body.
+  frame: 0.5,
+  shoulderWidth: 0.5,
+  hipWidth: 0.5,
+
+  // --- Muscle: how much, and where it is carried -----------------------
+  muscleUpper: 0.5, // 0 = the legs carry it, 1 = shoulders, chest and arms
+
+  // --- Fat: how much (weight, above), and where it settles -------------
+  // The same weight can be an apple or a pear. These decide which.
+  fatBelly: 0.5,
+  fatHips: 0.5,
+  fatLimbs: 0.5,
+
+  // --- Hair ------------------------------------------------------------
+  hairGrey: 0,
+  hairThin: 0,
+
+  // Clothing. Numbers rather than booleans because loadProfile coerces
+  // every stored field through num(): 1 is worn, 0 is not. Hair stays off
+  // by default — the hero bodies are deliberately bald (see SCALP_RE);
+  // this is just the switch that lifts it.
+  wearOutfit: 1,
+  wearHair: 0,
+  clothColor: 0,
+  // MakeHuman's armslegs micro modifiers, all neutral at the midpoint
+  handSize: 0.5,
+  footSize: 0.5,
+  upperArmLength: 0.5,
+  forearmLength: 0.5,
+  thighLength: 0.5,
+  shinLength: 0.5,
 }
 
 // Skin tints as multipliers over the authored skin texture, which is
@@ -135,6 +171,58 @@ export const clearProfile = () => {
   }
 }
 
+// --- The wardrobe ----------------------------------------------------------
+// Each body owns exactly one outfit, baked into its clothed export.
+//
+// It is all-or-nothing on purpose, and the reason is in the geometry:
+// MakeHuman deletes the body faces its garments cover, so the clothed
+// export's body is NOT watertight. Measured on the actual exports (open
+// boundary edges on the body mesh): male 40, all at the soles under the
+// boots; female 188, reaching the torso under the shift dress; nonbinary
+// 318, reaching the waist. The bare exports are watertight — 0 each.
+// Removing one garment would therefore tear a hole in the body under it,
+// so the switch is the whole outfit, and undressing loads the bare body.
+// Per-garment control needs the clothed models re-exported without
+// MakeHuman's delete-groups.
+export const OUTFITS = {
+  male: 'SWEATER, WOOL PANTS & BOOTS',
+  female: 'SHIFT DRESS & BALLET FLATS',
+  nonbinary: 'T-SHIRT, HAREM PANTS & SHOES',
+}
+
+export const HAIR_LABEL = {
+  male: 'MESSY CROP',
+  female: 'BLUNT BOB',
+  nonbinary: 'INVERTED BOB',
+}
+
+// The cloth palette. The garments' woven textures are dropped for a flat
+// hero colour (as they always have been), so this is what actually shows.
+export const CLOTH_COLORS = [
+  { name: 'WHITE', hex: '#eceff5' },
+  { name: 'SAND', hex: '#dccaa6' },
+  { name: 'CLAY', hex: '#b8735a' },
+  { name: 'MOSS', hex: '#6f8b5f' },
+  { name: 'SLATE', hex: '#5b6b80' },
+  { name: 'INK', hex: '#39404f' },
+]
+export const clothRGB = (index) => {
+  const { hex } = CLOTH_COLORS[Math.round(index)] || CLOTH_COLORS[0]
+  const n = parseInt(hex.slice(1), 16)
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]
+}
+
+// Which GLB to load. The outfit alone decides it: the clothed export
+// carries the garments AND the hair, the bare one carries the extra
+// body-detail morphs and a watertight body. Hair cannot outlive the
+// outfit — it lives only in the clothed export, and that export's body
+// is cut away under its garments, so showing it with the clothes hidden
+// would put the holes on display.
+export const isDressed = (body) => {
+  const b = { ...BODY_DEFAULTS, ...body }
+  return b.wearOutfit > 0.5
+}
+
 const MODEL_BY_GENDER = {
   male: 'male.glb',
   female: 'female.glb',
@@ -186,6 +274,67 @@ export const torsoScale = (t) => 1 + (Math.min(1, Math.max(0, t)) - 0.5) * 0.1
 
 // Age: youth carries a relatively bigger head.
 export const headAgeScale = (t) => 1 + (0.5 - Math.min(1, Math.max(0, t))) * 0.12
+
+// --- MakeHuman micro modifiers (the "armslegs" group) ----------------------
+// MakeHuman runs these as decr|incr pairs either side of a neutral
+// midpoint; one 0..1 slider covers both halves. The ranges mirror
+// MakeHuman's own: limb segments +-12%, hands and feet +-15%.
+const clamp01 = (t) => Math.min(1, Math.max(0, t))
+export const limbLengthScale = (t) => 1 + (clamp01(t) - 0.5) * 0.24
+export const extremityScale = (t) => 1 + (clamp01(t) - 0.5) * 0.3
+
+// Which bones each slider drives, mapped onto the export's chains
+// (shoulder01 > upperarm01 > upperarm02 > lowerarm01 > lowerarm02 > wrist,
+// and upperleg01 > upperleg02 > lowerleg01 > lowerleg02 > foot). Every
+// bone offsets along its own local +Y, so a segment's length is the sum
+// of the two joints hanging below it.
+//
+// Lengths MOVE the joints rather than scaling the bone. Scaling a bone's
+// length axis shears every rotated child — the same trap the girth code
+// documents above — whereas translating the child joint stretches the
+// skin between the two cleanly and carries everything below it rigidly.
+export const LIMB_SEGMENTS = {
+  upperArmLength: ['upperarm02', 'lowerarm01'],
+  forearmLength: ['lowerarm02', 'wrist'],
+  thighLength: ['upperleg02', 'lowerleg01'],
+  shinLength: ['lowerleg02', 'foot'],
+}
+// Hands and feet take a UNIFORM scale, which no rotation can shear, so
+// the fingers and toes below them come along for free.
+export const EXTREMITY_BONES = { handSize: 'wrist', footSize: 'foot' }
+
+// The bones whose .position the micro sliders own. The clips key every
+// bone's translation with its static rest offset, so the mixer would
+// overwrite these every frame — Character strips exactly these tracks.
+// Deliberately NOT root or pelvis: those are the only bones a clip could
+// legitimately translate (root motion), and a walk cycle never stretches
+// a limb, so every track named here is provably static.
+export const MICRO_LENGTH_BONES = new Set(
+  Object.values(LIMB_SEGMENTS).flat().flatMap((b) => [`${b}.L`, `${b}.R`])
+)
+
+// --- Age, as a driver across every system ----------------------------------
+// Age is not a shape of its own; it is a set of leans on the other
+// systems, which is how a body actually ages. One slider therefore moves
+// skin, fat, muscle, posture, facial proportion and hair together.
+//
+// (Facial proportion is the weak one: the exports carry no age morph, so
+// the head is merely rescaled. Real aged features need a re-export.)
+export const ageEffects = (t) => {
+  const a = clamp01(t)
+  const old = Math.max(0, a - 0.5) * 2 // 0 at mid-life, 1 at the far end
+  const young = Math.max(0, 0.5 - a) * 2
+  return {
+    muscleLoss: old * 0.35, // sarcopenia: mass goes first
+    fatToBelly: old * 0.45, // and fat migrates to the trunk...
+    fatFromLimbs: old * 0.35, // ...leaving the limbs
+    stoop: old * 0.55, // the spine gives
+    headScale: 1 + young * 0.07, // children are relatively big-headed
+    skin: old, // roughening and the elder texture swap
+    grey: old, // hair loses pigment...
+    thin: old * 0.8, // ...and density
+  }
+}
 
 // Past here (slider ~58yo) the body wears MakeHuman's wrinkled elder skin.
 const OLD_AGE = 0.65
@@ -373,14 +522,37 @@ export const applyBody = (root, body) => {
         o.material.needsUpdate = true
       }
     }
-    else if (SCALP_RE.test(name)) o.visible = false
+    else if (SCALP_RE.test(name)) {
+      o.visible = b.wearOutfit > 0.5 && b.wearHair > 0.5
+      // Greying and thinning, from the sliders and from age on top. Grey
+      // lifts the hair toward ash rather than washing it white; thinning
+      // fades it out, which reads better on a card-based hair mesh than
+      // shrinking it would.
+      const a = ageEffects(b.age)
+      const grey = Math.min(1, clamp01(b.hairGrey) + a.grey)
+      const thin = Math.min(0.85, clamp01(b.hairThin) + a.thin)
+      o.material.color.setRGB(
+        0.22 + grey * 0.58,
+        0.20 + grey * 0.57,
+        0.18 + grey * 0.56
+      )
+      if (thin > 0.01) {
+        o.material.transparent = true
+        o.material.opacity = 1 - thin
+      }
+      o.material.needsUpdate = true
+    }
     else if (CLOTHES_RE.test(name)) {
-      // Hero whites: drop the patterned cloth texture and wear pure white.
+      // The outfit goes on or comes off as one — see OUTFITS for why
+      // single garments cannot be removed without holing the body.
+      o.visible = b.wearOutfit > 0.5
+      // Hero cloth: drop the woven texture and take a flat chosen colour.
       if (o.material.map) {
         o.material.map = null
         o.material.needsUpdate = true
       }
-      o.material.color.setRGB(0.92, 0.92, 0.95)
+      const [cr, cg, cb] = clothRGB(b.clothColor)
+      o.material.color.setRGB(cr, cg, cb)
       // Matte cloth: specular highlights were carving every crease into
       // the flat white.
       o.material.roughness = 0.85
@@ -411,11 +583,17 @@ export const applyBody = (root, body) => {
   // scaling from earlier calls), then normalize all bodies to BASE_HEIGHT.
   if (!root.userData.baseHeight) {
     root.scale.setScalar(1)
+    root.position.y = 0
     root.updateMatrixWorld(true)
     const box = new Box3().setFromObject(root)
     root.userData.baseHeight = Math.max(0.1, box.max.y - box.min.y)
+    // How high the ankle rides above the floor, unscaled. A bigger foot
+    // scales about the ankle joint, so this is how far its sole drops.
+    const ankle = root.getObjectByName('foot.L')
+    root.userData.restAnkleY = ankle ? ankle.getWorldPosition(new Vector3()).y : 0.08
   }
-  root.scale.setScalar((BASE_HEIGHT / root.userData.baseHeight) * heightScale(b.height))
+  const rootScale = (BASE_HEIGHT / root.userData.baseHeight) * heightScale(b.height)
+  root.scale.setScalar(rootScale)
 
   // MakeHuman's own macro morphs: the v3 models carry six directional
   // targets baked from the canonical 0.5 midpoints out to MakeHuman's own
@@ -431,14 +609,29 @@ export const applyBody = (root, body) => {
   const eAs = Math.max(0, b.asian) + 0.5 * Math.max(0, b.indian)
   const eCa = Math.max(0, b.european) + 0.35 * Math.max(0, b.indian)
   const eSum = eAf + eAs + eCa || 1
+  // MakeHuman's macro modifiers are baked out as independent morph
+  // targets, so they simply sum. That stacking is intentional here — a
+  // heavy AND muscular body should read as both. What it must NOT do is
+  // crease, and the buckling that used to show over the ribs lived in the
+  // targets themselves (muscle_up alone rippled the surface ~6.7mm
+  // vertex-to-vertex). That is fixed at source now, by Laplacian-smoothing
+  // the macro deltas in the export — see scripts/smooth-morphs.mjs — so
+  // the sliders keep their full authored strength here.
   const influences = {
+    // Ethnicity is normalised to sum to 1 already and describes a whole
+    // phenotype rather than a deformation on top of one — left undamped.
     macro_african: eAf / eSum,
     macro_asian: eAs / eSum,
     macro_caucasian: eCa / eSum,
     macro_weight_up: Math.max(0, (b.weight - 0.5) * 2),
     macro_weight_down: Math.max(0, (0.5 - b.weight) * 2),
-    macro_muscle_up: Math.max(0, (b.muscle - 0.5) * 2),
-    macro_muscle_down: Math.max(0, (0.5 - b.muscle) * 2),
+    // Sarcopenia: age takes mass off the morph itself, so an old strong
+    // body still reads as older than a young one at the same slider.
+    macro_muscle_up: Math.max(0, (b.muscle - 0.5) * 2) * (1 - ageEffects(b.age).muscleLoss),
+    macro_muscle_down: Math.max(
+      0,
+      (0.5 - b.muscle) * 2 + ageEffects(b.age).muscleLoss * 0.5
+    ),
     macro_proportions_up: Math.max(0, (b.proportions - 0.5) * 2),
     macro_proportions_down: Math.max(0, (0.5 - b.proportions) * 2),
     macro_breastsize_up: Math.max(0, (b.breastSize - 0.5) * 2),
@@ -448,15 +641,11 @@ export const applyBody = (root, body) => {
     macro_weight: Math.max(0, ((b.weight - 0.35) / 0.65) * 1.8),
     macro_muscle: Math.max(0, (b.muscle - 0.5) * 3),
   }
-  let hasMorphs = false
   root.traverse((o) => {
     if (!o.isMesh || !o.morphTargetDictionary) return
     for (const name in influences) {
       const idx = o.morphTargetDictionary[name]
-      if (idx !== undefined) {
-        o.morphTargetInfluences[idx] = influences[name]
-        hasMorphs = true
-      }
+      if (idx !== undefined) o.morphTargetInfluences[idx] = influences[name]
     }
   })
 
@@ -470,22 +659,6 @@ export const applyBody = (root, body) => {
     if (!node.userData.restQuat) node.userData.restQuat = node.quaternion.clone()
     node.quaternion.copy(node.userData.restQuat)
     node.rotateX(stoop * k)
-  }
-
-  const w = hasMorphs ? 1 : weightScale(b.weight) // torso/hip/limb girth
-  const m = hasMorphs ? 1 : muscleScale(b.muscle) // shoulder/chest/arm build
-  const sp = hasMorphs ? 1 : torsoScale(b.proportions) // torso length (morphs own it)
-  const ha = headAgeScale(b.age)
-  const chest = 1 + (m - 1) * 0.6 // chest carries some of the muscle
-  const neck = 1 + (w * chest - 1) * 0.4 // neck thickens a little, not fully
-
-  const set = (name, x, y, z) => {
-    const bone = root.getObjectByName(name)
-    if (bone) bone.scale.set(x, y, z)
-  }
-  const setLR = (name, x, y, z) => {
-    set(`${name}.L`, x, y, z)
-    set(`${name}.R`, x, y, z)
   }
 
   // Weight and build, bone by bone — axis-aware. Each bone's length axis
@@ -512,27 +685,110 @@ export const applyBody = (root, body) => {
     boneScale(`${name}.R`, girthF, lengthF)
   }
 
-  // Torso: base girth from the hips up, an extra paunch at the belly that
-  // is countered one bone above so it never reaches chest, arms or head.
-  const belly = 1 + (w - 1) * 0.6
-  boneScale('spine05', w, sp)
+  // --- The layered body --------------------------------------------------
+  // The morphs above set how much muscle and fat there IS. The skeleton
+  // below decides where it SITS, and how broad the frame under it is.
+  // Keeping those separate is the whole point: two bodies of identical
+  // weight can be an apple or a pear, and two of identical muscle can be
+  // a swimmer or a cyclist. One "build" slider cannot say that.
+  //
+  // Every scale here is girth-only on an axis-aware helper, and every
+  // width is a joint TRANSLATION, never a length scale — non-uniform
+  // scale on a rotated child shears the mesh (see the note above).
+  const age = ageEffects(b.age)
+  const bias = (t) => (clamp01(t) - 0.5) * 2 // -1 .. +1 around neutral
+
+  // How much fat there is to place. Neutral weight sits at 0.35, so this
+  // is the travel above it — with a floor, or the distribution sliders
+  // would do nothing at all on a slim body.
+  const fatAmount = 0.45 + Math.max(0, (b.weight - 0.35) / 0.65) * 0.55
+  // ...and how much muscle, less whatever age has taken.
+  const muscleAmount = Math.max(0, (b.muscle - 0.5) * 2) * (1 - age.muscleLoss)
+
+  // FAT distribution. Age leans it toward the trunk and out of the limbs.
+  const belly = 1 + (bias(b.fatBelly) * 0.20 + age.fatToBelly * 0.16) * fatAmount
+  const seat = 1 + (bias(b.fatHips) * 0.20) * fatAmount
+  const limbFat = 1 + (bias(b.fatLimbs) * 0.14 - age.fatFromLimbs * 0.12) * fatAmount
+
+  // MUSCLE distribution: the same mass thrown upward or downward.
+  const upper = 1 + muscleAmount * (0.5 + 0.5 * bias(b.muscleUpper)) * 0.16
+  const lower = 1 + muscleAmount * (0.5 - 0.5 * bias(b.muscleUpper)) * 0.16
+
+  // SKELETON: the frame itself — ribcage depth and limb bone thickness,
+  // independent of anything living on top of it.
+  const frame = 1 + bias(b.frame) * 0.10
+
+  // Torso. The belly is countered one bone above so a paunch never
+  // travels up into the chest, arms or head.
+  // spine05 is the ROOT of the torso, so whatever it carries travels all
+  // the way up to the shoulders. Only the skeleton belongs there — seat
+  // fat lives on the pelvis, or widening someone's hips would narrow
+  // their shoulders. The belly is countered one bone above, so a paunch
+  // never reaches the chest, arms or head either.
+  boneScale('spine05', frame)
   boneScale('spine04', belly)
   boneScale('spine03', 1 / belly)
-  boneScale('spine02', chest)
-  // Arms: neutralise the inherited torso girth at the clavicle (the
-  // shoulder POSITIONS stay wide — that offset already happened), then
-  // give the arms their own thickness from muscle and weight.
-  boneScaleLR('clavicle', 1 / (w * chest))
-  boneScaleLR('upperarm01', m * (1 + (w - 1) * 0.45))
-  // Hips and legs: wide hips, heavy thighs, tapering calves.
-  boneScaleLR('pelvis', w)
-  boneScaleLR('upperleg01', 1 + (w - 1) * 0.6)
-  boneScaleLR('lowerleg01', 1 / (1 + (w - 1) * 0.55))
+  boneScale('spine02', upper * frame)
+  // Arms: cancel the inherited torso girth at the clavicle (the shoulder
+  // POSITIONS are set separately, below), then give the arms their own
+  // thickness from muscle and fat.
+  boneScaleLR('clavicle', 1 / (upper * frame))
+  boneScaleLR('upperarm01', upper * limbFat)
+  boneScaleLR('lowerarm01', 1 + (limbFat - 1) * 0.5)
+  // Hips and legs.
+  boneScaleLR('pelvis', seat)
+  boneScaleLR('upperleg01', lower * limbFat * (1 + (seat - 1) * 0.5))
+  boneScaleLR('lowerleg01', lower / (1 + (limbFat - 1) * 0.4))
+
+  // Frame WIDTH, as joint offsets: shoulder01 rides out along the
+  // clavicle, upperleg01 out along the pelvis. Translating the joint
+  // widens the skeleton without scaling — and therefore without shearing
+  // — anything hanging off it.
+  const widen = (bone, factor) => {
+    for (const side of ['.L', '.R']) {
+      const node = root.getObjectByName(bone + side)
+      if (!node) continue
+      if (!node.userData.restPos) node.userData.restPos = node.position.clone()
+      node.position.copy(node.userData.restPos).multiplyScalar(factor)
+    }
+  }
+  widen('shoulder01', 1 + bias(b.shoulderWidth) * 0.22)
+  widen('upperleg01', 1 + bias(b.hipWidth) * 0.20)
+
   // The neck cancels the torso scale EXACTLY: any residual non-uniform
   // scale near the head makes face vertices (blended across neck+head
   // bones) drift against the rigidly-boned tongue and teeth — that was
   // the tongue-through-chin artifact. Identity above the shoulders.
-  boneScale('neck01', 1 / (w * chest), 1 / sp)
+  boneScale('neck01', 1 / (upper * frame))
   const headBone = root.getObjectByName('head')
-  if (headBone) headBone.scale.setScalar(ha)
+  if (headBone) headBone.scale.setScalar(age.headScale)
+
+  // --- The micro modifiers: limb lengths, hands and feet -----------------
+  // Set absolutely from a cached rest pose, so dragging a slider never
+  // accumulates. Lengthening a leg pushes the foot through the floor, so
+  // the added length is tallied and given back as a lift on the root.
+  let legDrop = 0
+  for (const key in LIMB_SEGMENTS) {
+    const f = limbLengthScale(b[key])
+    const leg = key === 'thighLength' || key === 'shinLength'
+    for (const base of LIMB_SEGMENTS[key]) {
+      for (const side of ['.L', '.R']) {
+        const node = root.getObjectByName(base + side)
+        if (!node) continue
+        if (!node.userData.restPos) node.userData.restPos = node.position.clone()
+        node.position.copy(node.userData.restPos).multiplyScalar(f)
+        // one side only: both legs lengthen together, the body drops once
+        if (leg && side === '.L') legDrop += node.userData.restPos.length() * (f - 1)
+      }
+    }
+  }
+  for (const key in EXTREMITY_BONES) {
+    const f = extremityScale(b[key])
+    for (const side of ['.L', '.R']) {
+      const node = root.getObjectByName(EXTREMITY_BONES[key] + side)
+      if (node) node.scale.setScalar(f)
+    }
+  }
+  legDrop += (root.userData.restAnkleY || 0) * (extremityScale(b.footSize) - 1)
+  root.position.y = legDrop * rootScale
 }

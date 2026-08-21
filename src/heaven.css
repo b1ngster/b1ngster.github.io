@@ -175,7 +175,9 @@
 .heaven-tune {
   position: absolute;
   right: 2vw;
-  top: 50%;
+  /* Sits above centre rather than on it: the panel is reached for far more
+     than the body is, so it wants to be up where a hand already is. */
+  top: 44%;
   transform: translateY(-50%);
   z-index: 20;
   width: min(19rem, 36vw);
@@ -190,12 +192,189 @@
     right: 2vw;
     left: 2vw;
     top: auto;
-    bottom: 2vh;
+    /* Lifted clear of the bottom edge, where the browser chrome and the
+       home indicator both compete for the same thumb. Held to 44vh so the
+       panel cannot creep back over the body it is shaping — with the
+       collapse toggle, the whole canvas is one tap away regardless. */
+    bottom: 13vh;
     transform: none;
     width: auto;
     max-width: none;
-    max-height: 46vh;
+    max-height: 44vh;
   }
+}
+
+/* Collapsed, the panel is just its own handle, and the body is free. */
+.tune-collapse {
+  display: block;
+  width: 100%;
+  padding: 0.4rem;
+  margin-bottom: 0.6rem;
+  font: inherit;
+  font-size: 0.95rem;
+  letter-spacing: 0.14em;
+  color: #2b3a4d;
+  background: none;
+  border: none;
+  border-bottom: 1px solid #d6e3ef;
+  cursor: pointer;
+  min-height: 2.4rem;
+}
+
+.heaven-tune.is-collapsed {
+  max-height: none;
+  overflow: visible;
+  padding: 0.3rem 1rem;
+}
+
+.heaven-tune.is-collapsed .tune-collapse {
+  margin-bottom: 0;
+  border-bottom: none;
+}
+
+/* --- Clothing --------------------------------------------------------- */
+
+.tune-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  margin-bottom: 0.35rem;
+  font: inherit;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-align: left;
+  color: #58708c;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid #c3d6e8;
+  border-radius: 8px;
+  cursor: pointer;
+  min-height: 2.4rem;
+}
+
+.tune-toggle.is-on {
+  color: #2b3a4d;
+  border-color: #e0a72e;
+  background: rgba(244, 201, 93, 0.18);
+}
+
+.tune-tick {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 1.1rem;
+  height: 1.1rem;
+  font-size: 0.75rem;
+  color: #fff;
+  border: 1px solid #c3d6e8;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.tune-toggle.is-on .tune-tick {
+  background: linear-gradient(#f4c95d, #e0a72e);
+  border-color: #e0a72e;
+}
+
+.tune-toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tune-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.2rem 0 0.4rem;
+}
+
+.tune-chip {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(60, 100, 150, 0.35);
+}
+
+.tune-chip.is-on {
+  border-color: #e0a72e;
+  box-shadow: 0 0 0 2px rgba(224, 167, 46, 0.55);
+}
+
+.tune-note {
+  margin: 0.6rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  text-align: left;
+  color: #7d90a6;
+}
+
+/* Jump straight to the part being shaped. Top-centre, clear of both the
+   panel and the thumb that drags the model around. */
+.tune-views {
+  position: absolute;
+  top: 2vh;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 21;
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.3rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 6px 20px rgba(60, 100, 150, 0.22);
+}
+
+.tune-view {
+  padding: 0.4rem 0.75rem;
+  font: inherit;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  color: #58708c;
+  background: none;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  min-height: 2.1rem;
+}
+
+.tune-view.is-on {
+  color: #fff;
+  background: linear-gradient(#f4c95d, #e0a72e);
+}
+
+/* MACRO / MICRO */
+.tune-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.6rem 0 0.7rem;
+}
+
+.tune-tab {
+  flex: 1 1 4.2rem;
+  padding: 0.42rem 0.35rem;
+  font: inherit;
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  color: #58708c;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid #c3d6e8;
+  border-radius: 8px;
+  cursor: pointer;
+  /* a comfortable touch target even though the label is small */
+  min-height: 2.2rem;
+}
+
+.tune-tab.is-on {
+  color: #fff;
+  background: linear-gradient(#f4c95d, #e0a72e);
+  border-color: #e0a72e;
+  box-shadow: 0 3px 10px rgba(224, 167, 46, 0.4);
 }
 
 .heaven-tune label {
