@@ -120,10 +120,10 @@ class SkyBoundary extends React.Component {
   }
 }
 
-export const HeavenSky = ({ file = 'heaven_sky_1k.hdr' }) => (
+export const HeavenSky = ({ file = 'heaven_sky_1k.hdr', lightingOnly = false }) => (
   <SkyBoundary>
     <Suspense fallback={null}>
-      <Environment files={`${process.env.PUBLIC_URL}/hdri/${file}`} background />
+      <Environment files={`${process.env.PUBLIC_URL}/hdri/${file}`} background={!lightingOnly} />
     </Suspense>
   </SkyBoundary>
 )

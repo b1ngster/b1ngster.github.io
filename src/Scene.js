@@ -103,8 +103,14 @@ const Character = ({ url, motion, sing, body, onReady }) => {
     return c
   }, [template])
   // The heavenly onboarding's choices: skin tint, height, and weight.
+  // Re-applied when a swapped skin texture finishes streaming — maps are
+  // only assigned once loaded, so late arrivals need a second pass.
   useEffect(() => {
-    if (body) applyBody(scene, body)
+    if (!body) return
+    applyBody(scene, body)
+    const re = () => applyBody(scene, body)
+    window.addEventListener('skin-tex-loaded', re)
+    return () => window.removeEventListener('skin-tex-loaded', re)
   }, [scene, body])
   // Mounting means the GLB resolved (we render inside Suspense) — let the
   // intro crossfade know the real character is on stage.

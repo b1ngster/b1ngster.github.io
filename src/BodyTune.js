@@ -7,10 +7,10 @@
  * the body stays in view while it is being shaped. Continue seals it.
  */
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { useGLTF } from '@react-three/drei'
+import { Canvas, useThree } from '@react-three/fiber'
+import { OrbitControls, useGLTF } from '@react-three/drei'
 import { SkeletonUtils } from 'three-stdlib'
-import { CloudField, SKY, HeavenSky } from './heaven'
+import { SKY, HeavenSky } from './heaven'
 import {
   modelUrlFor, applyBody, swatchColor, BODY_DEFAULTS, ETHNICITY_KEYS,
   dominantEthnicity, genderToSlider, sliderToGender,
@@ -30,41 +30,46 @@ const PreviewModel = ({ url, body }) => {
     })
     return c
   }, [scene])
-  const group = useRef()
-
   useEffect(() => {
     applyBody(model, body)
+    const re = () => applyBody(model, body)
+    window.addEventListener('skin-tex-loaded', re)
+    return () => window.removeEventListener('skin-tex-loaded', re)
   }, [model, body])
 
-  useFrame((state, delta) => {
-    if (group.current) group.current.rotation.y += delta * 0.35
-  })
-
-  return (
-    <group ref={group}>
-      <primitive object={model} />
-    </group>
-  )
+  // No turntable: the hero holds still and the USER walks around them
+  // (drag to orbit, pinch to zoom — OrbitControls below).
+  return <primitive object={model} />
 }
 
-// Frame the body clear of the panel: landscape docks the panel right, so
-// nudge the body left; portrait (or any narrow window) docks it along the
-// bottom, so look lower down (which lifts the body into the top of the
-// frame). The 560px cutoff mirrors the .heaven-tune media query — the
-// camera and the CSS must agree on which layout is showing.
-const TuneCamera = () => {
+// Touch-first framing: starts close, one finger orbits, pinch (or
+// wheel) zooms. The initial target keeps the body clear of the panel —
+// portrait docks the panel along the bottom, so aim lower there. The
+// 560px cutoff mirrors the .heaven-tune media query.
+const TuneControls = () => {
   const { camera, size } = useThree()
+  const controls = useRef()
+  const portrait = size.height > size.width || size.width <= 560
   useEffect(() => {
-    const portrait = size.height > size.width || size.width <= 560
     if (portrait) {
-      camera.position.set(0, 1.5, 4.4)
-      camera.lookAt(0, 0.1, 0)
+      camera.position.set(0, 1.4, 3.0)
+      controls.current?.target.set(0, 0.6, 0)
     } else {
-      camera.position.set(0.5, 1.5, 3.6)
-      camera.lookAt(-0.3, 0.9, 0)
+      camera.position.set(0.35, 1.3, 2.3)
+      controls.current?.target.set(-0.1, 0.95, 0)
     }
-  }, [camera, size])
-  return null
+    controls.current?.update()
+  }, [camera, portrait])
+  return (
+    <OrbitControls
+      ref={controls}
+      enablePan={false}
+      minDistance={0.7}
+      maxDistance={6}
+      zoomSpeed={0.8}
+      rotateSpeed={0.9}
+    />
+  )
 }
 
 const Slider = ({ label, value, onChange, left, right, swatch }) => (
@@ -90,9 +95,6 @@ const Slider = ({ label, value, onChange, left, right, swatch }) => (
 )
 
 export const BodyTune = ({ gender, modelVersion, onDone }) => {
-  // ?bare swaps in the unclothed body (male european only, so far) — for
-  // inspecting the macro deformations directly on the skin.
-  const bare = useMemo(() => new URLSearchParams(window.location.search).has('bare'), [])
   const [genderT, setGenderT] = useState(() => genderToSlider(gender))
   const [body, setBody] = useState(BODY_DEFAULTS)
   const field = (key) => (v) => setBody((b) => ({ ...b, [key]: v }))
@@ -102,28 +104,23 @@ export const BodyTune = ({ gender, modelVersion, onDone }) => {
   return (
     <>
       <Canvas shadows camera={{ position: [0.5, 1.5, 3.6], fov: 50 }}>
-        <color attach="background" args={[SKY.top]} />
-        <HeavenSky />
+        {/* flat backdrop: the HDR background + sprite haze dithered into
+            rainbow speckle on mobile — the mirror is a studio now */}
+        <color attach="background" args={['#dfe7ef']} />
+        <HeavenSky lightingOnly />
         <fog attach="fog" args={[SKY.horizon, 9, 26]} />
         {/* restrained: the HDRI already lights the scene, and blown-out
             highlights were washing the skin tints to nothing */}
         <ambientLight intensity={0.35} />
         <directionalLight castShadow position={[3, 6, 4]} intensity={0.8} color="#fff2d8" />
         <directionalLight position={[-4, 3, -2]} intensity={0.25} color="#cfe2f7" />
-        {/* no floor up here — a cloud bank holds the hero up */}
-        <CloudField count={12} center={[0, -0.5, 0]} spread={[5, 1, 4]} scale={[2, 4.5]} opacity={0.95} />
         <Suspense fallback={null}>
           <PreviewModel
-            url={
-              bare && liveGender === 'male' && dominantEthnicity(body) === 'european'
-                ? `${process.env.PUBLIC_URL}/models/male_bare.glb?v=${modelVersion}`
-                : modelUrlFor(liveGender, modelVersion, dominantEthnicity(body))
-            }
+            url={modelUrlFor(liveGender, modelVersion, dominantEthnicity(body), true)}
             body={{ ...body, gender: liveGender }}
           />
         </Suspense>
-        <CloudField count={20} center={[0, 2.5, -7]} spread={[30, 8, 10]} opacity={0.7} />
-        <TuneCamera />
+        <TuneControls />
       </Canvas>
       <div className="heaven-tune heaven-card">
         <h1 style={{ fontSize: '1.1rem' }}>SHAPE YOURSELF</h1>
@@ -143,6 +140,8 @@ export const BodyTune = ({ gender, modelVersion, onDone }) => {
         <Slider label="WEIGHT" value={body.weight} onChange={field('weight')} />
         <Slider label="MUSCLE" value={body.muscle} onChange={field('muscle')} />
         <Slider label="PROPORTIONS" value={body.proportions} onChange={field('proportions')} />
+        <Slider label="BREAST SIZE" value={body.breastSize} onChange={field('breastSize')} />
+        <Slider label="FIRMNESS" value={body.breastFirmness} onChange={field('breastFirmness')} />
         <button
           className="heaven-button"
           style={{ marginTop: '1rem' }}

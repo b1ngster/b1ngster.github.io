@@ -14,7 +14,7 @@
  * spine. Baking real macro morphs via the MPFB pipeline is the future
  * upgrade path.
  */
-import { Box3, TextureLoader, Vector2, sRGBEncoding } from 'three'
+import { Box3, CanvasTexture, TextureLoader, Vector2, sRGBEncoding } from 'three'
 
 const KEY = 'b1ngster.profile.v2'
 
@@ -32,6 +32,8 @@ export const BODY_DEFAULTS = {
   weight: 0.35,
   muscle: 0.5,
   proportions: 0.5,
+  breastSize: 0.5,
+  breastFirmness: 0.5,
 }
 
 // Skin tints as multipliers over the authored skin texture, which is
@@ -138,8 +140,11 @@ const MODEL_BY_GENDER = {
   female: 'female.glb',
   nonbinary: 'nonbinary.glb',
 }
-export const modelUrlFor = (gender, version, ethnicity = 'european') => {
-  const base = (MODEL_BY_GENDER[gender] || 'nonbinary.glb').replace('.glb', '')
+export const modelUrlFor = (gender, version, ethnicity = 'european', bare = false) => {
+  let base = (MODEL_BY_GENDER[gender] || 'nonbinary.glb').replace('.glb', '')
+  // The modelling mirror works on the anatomical nude body, MakeHuman
+  // style; the lobby wears real geometry clothing.
+  if (bare) base += '_bare' 
   // One unified model per gender: ethnicity is now morph geometry inside
   // the GLB, blended continuously — no per-ethnicity files. (The
   // receptionist has her own female_reception.glb with the visemes.)
@@ -207,12 +212,19 @@ const youngTextureUrl = (ethnicity, gender) => {
 const oldTexCache = {}
 const loadOldTex = (url) => {
   if (!oldTexCache[url]) {
-    const t = new TextureLoader().load(url)
+    const entry = { tex: null }
+    const t = new TextureLoader().load(url, () => {
+      entry.tex = t
+      // let mounted characters re-apply now the map is usable
+      window.dispatchEvent(new Event('skin-tex-loaded'))
+    })
     t.flipY = false // glTF UV convention
     t.encoding = sRGBEncoding
-    oldTexCache[url] = t
+    oldTexCache[url] = entry
   }
-  return oldTexCache[url]
+  // null until the image has streamed — callers keep their current map,
+  // because three renders a not-yet-loaded texture as solid black
+  return oldTexCache[url].tex
 }
 
 // Micro-detail maps baked from MPFB's enhanced procedural skin (Cycles
@@ -227,6 +239,77 @@ const loadDetailTex = (name) => {
     detailCache[name] = t
   }
   return detailCache[name]
+}
+
+// --- Composited skin: swimwear painted over tinted skin --------------------
+// The suit must stay white on every skin tone, so tinting happens in
+// TEXTURE space: base skin x tint on a canvas, then the swimwear regions
+// (UV masks rasterized from the body geometry) painted white on top.
+const imageCache = {}
+const loadImage = (url) => {
+  if (!imageCache[url]) {
+    imageCache[url] = new Promise((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => resolve(img)
+      img.onerror = reject
+      img.src = url
+    })
+  }
+  return imageCache[url]
+}
+
+// luminance mask -> alpha canvas, once per mask
+const alphaMaskCache = {}
+const alphaMask = (img, key) => {
+  if (!alphaMaskCache[key]) {
+    const c = document.createElement('canvas')
+    c.width = c.height = 1024
+    const ctx = c.getContext('2d')
+    ctx.drawImage(img, 0, 0, 1024, 1024)
+    const d = ctx.getImageData(0, 0, 1024, 1024)
+    for (let i = 0; i < d.data.length; i += 4) d.data[i + 3] = d.data[i]
+    ctx.putImageData(d, 0, 0)
+    alphaMaskCache[key] = c
+  }
+  return alphaMaskCache[key]
+}
+
+const SUIT_URL = (m) => `${process.env.PUBLIC_URL}/textures/skin/${m}.webp`
+const compositedCache = {}
+const compositeSkin = (baseUrl, tint, gender, onReady) => {
+  const key = `${baseUrl}|${tint.map((v) => v.toFixed(2)).join(',')}|${gender}`
+  if (compositedCache[key]) {
+    onReady(compositedCache[key], key)
+    return key
+  }
+  const wantTop = gender !== 'male'
+  Promise.all([
+    loadImage(baseUrl),
+    loadImage(SUIT_URL('suit_briefs')),
+    wantTop ? loadImage(SUIT_URL('suit_top')) : Promise.resolve(null),
+  ]).then(([base, briefs, top]) => {
+    if (compositedCache[key]) {
+      onReady(compositedCache[key], key)
+      return
+    }
+    const c = document.createElement('canvas')
+    c.width = c.height = 1024
+    const ctx = c.getContext('2d')
+    ctx.drawImage(base, 0, 0, 1024, 1024)
+    ctx.globalCompositeOperation = 'multiply'
+    ctx.fillStyle = `rgb(${Math.round(tint[0] * 255)}, ${Math.round(tint[1] * 255)}, ${Math.round(tint[2] * 255)})`
+    ctx.fillRect(0, 0, 1024, 1024)
+    ctx.globalCompositeOperation = 'source-over'
+    // No painted clothing: the skin is real printed skin; clothing is
+    // real geometry worn over it. (briefs/top masks retired.)
+    void briefs; void top
+    const tex = new CanvasTexture(c)
+    tex.flipY = false
+    tex.encoding = sRGBEncoding
+    compositedCache[key] = tex
+    onReady(tex, key)
+  }).catch(() => {})
+  return key
 }
 
 // --- Applying a body to a character ---------------------------------------
@@ -256,24 +339,24 @@ export const applyBody = (root, body) => {
     if (!o.isMesh || !o.material) return
     const name = o.material.name
     if (/\.body$/.test(name)) {
-      o.material.color.setRGB(r, g, bl)
-      // Elders wear the wrinkled skin; the authored map is kept for the
-      // way back down the slider. Unified (v4) models also swap the young
-      // skin by dominant ethnicity — mixed faces come from the morphs,
-      // authentic texture detail from the swap, shade from the tint.
-      if (o.material.userData.youngMap === undefined) o.material.userData.youngMap = o.material.map
       const unified = !!(o.morphTargetDictionary && 'macro_african' in o.morphTargetDictionary)
-      // Unified models ALWAYS swap to the cleaned runtime textures — the
-      // GLB-embedded skin still has MakeHuman's painted-on hair.
-      const young = unified
-        ? loadOldTex(youngTextureUrl(dominant, b.gender))
-        : o.material.userData.youngMap
-      const wanted = b.age > OLD_AGE
-        ? loadOldTex(oldTextureUrl(dominant, b.gender))
-        : young
-      if (o.material.map !== wanted) {
-        o.material.map = wanted
-        o.material.needsUpdate = true
+      if (unified) {
+        // Composited skin: tint baked into the texture, swimwear painted
+        // white over it. Material colour stays neutral so the suit never
+        // browns on dark skin. Assigned only when the canvas is ready.
+        o.material.color.setRGB(1, 1, 1)
+        const baseUrl = b.age > OLD_AGE
+          ? oldTextureUrl(dominant, b.gender)
+          : youngTextureUrl(dominant, b.gender)
+        const mat = o.material
+        mat.userData.wantKey = compositeSkin(baseUrl, [r, g, bl], b.gender, (tex, key) => {
+          if (mat.userData.wantKey === key && mat.map !== tex) {
+            mat.map = tex
+            mat.needsUpdate = true
+          }
+        })
+      } else {
+        o.material.color.setRGB(r, g, bl)
       }
       // Matte skin: the baked roughness map modulates BELOW this
       // multiplier, and the environment reflection is cut hard — real
@@ -358,6 +441,10 @@ export const applyBody = (root, body) => {
     macro_muscle_down: Math.max(0, (0.5 - b.muscle) * 2),
     macro_proportions_up: Math.max(0, (b.proportions - 0.5) * 2),
     macro_proportions_down: Math.max(0, (0.5 - b.proportions) * 2),
+    macro_breastsize_up: Math.max(0, (b.breastSize - 0.5) * 2),
+    macro_breastsize_down: Math.max(0, (0.5 - b.breastSize) * 2),
+    macro_breastfirm_up: Math.max(0, (b.breastFirmness - 0.5) * 2),
+    macro_breastfirm_down: Math.max(0, (0.5 - b.breastFirmness) * 2),
     macro_weight: Math.max(0, ((b.weight - 0.35) / 0.65) * 1.8),
     macro_muscle: Math.max(0, (b.muscle - 0.5) * 3),
   }
