@@ -8,7 +8,7 @@ import React, { useMemo, useRef, useState } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Text } from '@react-three/drei'
 import * as THREE from 'three'
-import { CloudField, SKY, HeavenSky } from './heaven'
+import { SKY, HeavenSky } from './heaven'
 
 const DOORS = [
   { gender: 'female', label: 'FEMALE', x: -3.2 },
@@ -112,8 +112,8 @@ export const GenderGate = ({ onPick }) => {
   return (
     <Canvas shadows camera={{ position: [0, 1.5, 6.4], fov: 55 }}>
       <color attach="background" args={[SKY.top]} />
-        <HeavenSky />
-      <fog attach="fog" args={[SKY.horizon, 12, 34]} />
+      {/* the same photographic sky as the ascension and the gate */}
+      <HeavenSky file="heaven_clouds_1k.hdr" />
       <ambientLight intensity={0.75} />
       <directionalLight castShadow position={[4, 8, 6]} intensity={1.1} color="#fff2d8" />
       {/* no floor up here — the doors stand on cloud itself */}
@@ -127,11 +127,6 @@ export const GenderGate = ({ onPick }) => {
           onPick={() => pick(d)}
         />
       ))}
-      <CloudField count={26} center={[0, 3, -8]} spread={[44, 10, 14]} opacity={0.75} />
-      <CloudField count={14} center={[0, -1.5, 4]} spread={[30, 2, 10]} scale={[4, 9]} opacity={0.9} />
-      <Text position={[0, 4.1, -2]} fontSize={0.34} color="#ffffff" outlineWidth={0.015} outlineColor="#6d94ba" anchorX="center">
-        WHO WALKS IN?
-      </Text>
       <GateCamera chosenX={chosen ? chosen.x : null} />
     </Canvas>
   )
